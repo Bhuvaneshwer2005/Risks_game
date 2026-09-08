@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "dev",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "port": 5173
+    },
+    {
+      "name": "scripts-preview",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "http.server", "8532", "--directory", "scripts"],
+      "port": 8532
+    }
+  ]
+}

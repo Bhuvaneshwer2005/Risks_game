@@ -1,0 +1,55 @@
+.risk-map {
+  width: 100%;
+  height: auto;
+  background: #cfe8f3;
+  border-radius: 8px;
+}
+
+.map-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  background: #cfe8f3;
+  border-radius: 8px;
+  color: #33475b;
+  font-size: 1rem;
+}
+
+.territory {
+  stroke: #1c2027;
+  stroke-width: 0.75;
+  cursor: pointer;
+  transition: filter 0.1s ease;
+}
+
+.territory:hover {
+  filter: brightness(1.15);
+}
+
+.territory--selected {
+  stroke: #ffd166;
+  stroke-width: 2.5;
+}
+
+.territory--eligible {
+  stroke: #ef476f;
+  stroke-width: 2;
+  stroke-dasharray: 4 2;
+}
+
+.territory-label circle {
+  fill: rgba(20, 22, 28, 0.75);
+  stroke: rgba(255, 255, 255, 0.6);
+  stroke-width: 0.75;
+  pointer-events: none;
+}
+
+.territory-label text {
+  fill: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  text-anchor: middle;
+  pointer-events: none;
+  font-family: system-ui, sans-serif;
+}
