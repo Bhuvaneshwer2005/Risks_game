@@ -7,10 +7,11 @@ import type { Database } from "./database.types";
 // defaults means the app works out of the box on any static host without
 // needing build-time environment variables configured first; env vars
 // still override them for pointing a local checkout at a different project.
-const url = import.meta.env.VITE_SUPABASE_URL || "https://qshfimgyavoxutecihbw.supabase.co";
-const publishableKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || "sb_publishable_X4bEafQ5atcRXbxDSdyLrg_Ma-wh2zd";
+export const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "https://qshfimgyavoxutecihbw.supabase.co";
+export const SUPABASE_PUBLISHABLE_KEY =
+  import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || "sb_publishable_X4bEafQ5atcRXbxDSdyLrg_Ma-wh2zd";
 
-export const supabase = createClient<Database>(url, publishableKey);
+export const supabase = createClient<Database>(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
 
 // Every player is anonymous - a room code plus a display name is the whole
 // identity model for v1, no email/password signup. Idempotent: if a session

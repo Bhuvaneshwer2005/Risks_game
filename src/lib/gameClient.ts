@@ -1,8 +1,8 @@
-import { supabase } from "./supabaseClient";
+import { supabase, SUPABASE_PUBLISHABLE_KEY, SUPABASE_URL } from "./supabaseClient";
 import type { AttackRollResult } from "../game/combat";
 import type { TerritoryId } from "../game/mapData";
 
-const FUNCTIONS_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/game`;
+const FUNCTIONS_URL = `${SUPABASE_URL}/functions/v1/game`;
 
 // Thin wrapper around the `game` Edge Function - every game action is a
 // server-authoritative POST, never a direct table write from the client
@@ -18,7 +18,7 @@ async function call<T = { ok: true }>(action: string, body: Record<string, unkno
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${session.access_token}`,
-      apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+      apikey: SUPABASE_PUBLISHABLE_KEY,
     },
     body: JSON.stringify({ action, ...body }),
   });
