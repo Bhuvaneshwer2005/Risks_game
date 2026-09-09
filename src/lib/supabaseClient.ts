@@ -1,12 +1,14 @@
 import { createClient } from "@supabase/supabase-js";
 import type { Database } from "./database.types";
 
-const url = import.meta.env.VITE_SUPABASE_URL;
-const publishableKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
-
-if (!url || !publishableKey) {
-  throw new Error("Missing VITE_SUPABASE_URL / VITE_SUPABASE_PUBLISHABLE_KEY - copy .env.example to .env.local");
-}
+// The Supabase URL and publishable ("anon") key are not secrets - they're
+// meant to ship in client-side code (that's the whole point of the
+// Row Level Security policies guarding every table). Hardcoding them as
+// defaults means the app works out of the box on any static host without
+// needing build-time environment variables configured first; env vars
+// still override them for pointing a local checkout at a different project.
+const url = import.meta.env.VITE_SUPABASE_URL || "https://qshfimgyavoxutecihbw.supabase.co";
+const publishableKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || "sb_publishable_X4bEafQ5atcRXbxDSdyLrg_Ma-wh2zd";
 
 export const supabase = createClient<Database>(url, publishableKey);
 
