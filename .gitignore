@@ -34,3 +34,8 @@ supabase/.temp
 
 # Debug output from scripts/render-preview.mjs
 scripts/preview.html
+
+# Regenerable output from scripts/map-tools/build_masks.py
+scripts/map-tools/mask_*.npy
+scripts/map-tools/masks_preview.png
+scripts/map-tools/__pycache__/

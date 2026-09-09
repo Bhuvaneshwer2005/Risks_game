@@ -1,12 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
 import { ALL_TERRITORY_IDS, TERRITORIES, type TerritoryId } from "../game/mapData";
-import { buildTerritoryPaths, type TerritoryFeatureCollection, type TerritoryPaths } from "../game/projection";
 import type { PlayerId, TerritoryState } from "../game/types";
 import "./Map.css";
 
-const BOARD_WIDTH = 1600;
-const BOARD_HEIGHT = 900;
-const UNCLAIMED_FILL = "#3a3f4b";
+const BOARD_WIDTH = 1234;
+const BOARD_HEIGHT = 864;
+
+interface IllustratedMapData {
+  width: number;
+  height: number;
+  paths: Record<TerritoryId, string>;
+  centroids: Record<TerritoryId, [number, number]>;
+}
 
 interface MapProps {
   territories: Record<TerritoryId, TerritoryState>;
@@ -17,49 +22,52 @@ interface MapProps {
   onSelectTerritory?: (id: TerritoryId) => void;
 }
 
-// Module-level cache: the geometry is static and identical for every board
-// on the page, so fetch and lay it out once no matter how many <Map>
-// instances mount.
-let cachedPaths: TerritoryPaths | null = null;
-let cachedPathsPromise: Promise<TerritoryPaths> | null = null;
+// Module-level cache: the map data is static and identical for every board
+// on the page, so fetch it once no matter how many <Map> instances mount.
+let cachedData: IllustratedMapData | null = null;
+let cachedDataPromise: Promise<IllustratedMapData> | null = null;
 
-function loadTerritoryPaths(): Promise<TerritoryPaths> {
-  if (cachedPaths) return Promise.resolve(cachedPaths);
-  if (!cachedPathsPromise) {
-    cachedPathsPromise = fetch("/territoryGeometry.json")
+function loadMapData(): Promise<IllustratedMapData> {
+  if (cachedData) return Promise.resolve(cachedData);
+  if (!cachedDataPromise) {
+    cachedDataPromise = fetch("/illustratedMap.json")
       .then((r) => r.json())
-      .then((fc: TerritoryFeatureCollection) => {
-        cachedPaths = buildTerritoryPaths(fc, BOARD_WIDTH, BOARD_HEIGHT);
-        return cachedPaths;
+      .then((data: IllustratedMapData) => {
+        cachedData = data;
+        return data;
       });
   }
-  return cachedPathsPromise;
+  return cachedDataPromise;
 }
 
 export function Map({ territories, playerColors, selectedTerritory, eligibleTargets, onSelectTerritory }: MapProps) {
-  const [paths, setPaths] = useState<TerritoryPaths | null>(cachedPaths);
+  const [data, setData] = useState<IllustratedMapData | null>(cachedData);
 
   useEffect(() => {
-    if (paths) return;
+    if (data) return;
     let cancelled = false;
-    loadTerritoryPaths().then((p) => {
-      if (!cancelled) setPaths(p);
+    loadMapData().then((d) => {
+      if (!cancelled) setData(d);
     });
     return () => {
       cancelled = true;
     };
-  }, [paths]);
+  }, [data]);
 
-  const fills = useMemo(() => {
-    const result = {} as Record<TerritoryId, string>;
+  // Unclaimed territories keep the illustration's own continent color
+  // showing through (no overlay); claimed ones get a solid owner-color
+  // tint painted on top, opaque enough to read clearly as "owned" while
+  // the hand-drawn linework still shows through underneath.
+  const overlays = useMemo(() => {
+    const result = {} as Record<TerritoryId, string | null>;
     for (const id of ALL_TERRITORY_IDS) {
       const owner = territories[id]?.owner ?? null;
-      result[id] = owner ? (playerColors[owner] ?? UNCLAIMED_FILL) : UNCLAIMED_FILL;
+      result[id] = owner ? (playerColors[owner] ?? null) : null;
     }
     return result;
   }, [territories, playerColors]);
 
-  if (!paths) {
+  if (!data) {
     return (
       <div className="map-loading" style={{ aspectRatio: `${BOARD_WIDTH} / ${BOARD_HEIGHT}` }}>
         Loading map…
@@ -68,17 +76,20 @@ export function Map({ territories, playerColors, selectedTerritory, eligibleTarg
   }
 
   return (
-    <svg className="risk-map" viewBox={`0 0 ${BOARD_WIDTH} ${BOARD_HEIGHT}`} role="img" aria-label="Risk world map">
+    <svg className="risk-map" viewBox={`0 0 ${data.width} ${data.height}`} role="img" aria-label="Risk world map">
+      <image href="/risk_map.jpg" width={data.width} height={data.height} />
       {ALL_TERRITORY_IDS.map((id) => {
-        const d = paths.d[id];
+        const d = data.paths[id];
         if (!d) return null;
         const isSelected = selectedTerritory === id;
         const isEligible = eligibleTargets?.has(id) ?? false;
+        const owner = overlays[id];
         return (
           <path
             key={id}
             d={d}
-            fill={fills[id]}
+            fill={owner ?? "#000"}
+            fillOpacity={owner ? 0.62 : 0}
             className={`territory${isSelected ? " territory--selected" : ""}${isEligible ? " territory--eligible" : ""}`}
             onClick={onSelectTerritory ? () => onSelectTerritory(id) : undefined}
           >
@@ -87,7 +98,7 @@ export function Map({ territories, playerColors, selectedTerritory, eligibleTarg
         );
       })}
       {ALL_TERRITORY_IDS.map((id) => {
-        const c = paths.centroid[id];
+        const c = data.centroids[id];
         const armies = territories[id]?.armies;
         if (!c || armies === undefined) return null;
         return (
