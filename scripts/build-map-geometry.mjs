@@ -196,7 +196,7 @@ features.push({
 // winding again (it did, at higher tolerances, during development), so
 // re-apply the same rewind fix afterward rather than trusting it's still
 // correct.
-const simplified = simplifyFn(featureCollection(features), { tolerance: 0.03, highQuality: true, mutate: true });
+const simplified = simplifyFn(featureCollection(features), { tolerance: 0.08, highQuality: true, mutate: true });
 simplified.features = simplified.features.map((f) => ({ ...f, geometry: rewind(stripEmptyPolygons(f.geometry)) }));
 
 // Lives in public/, not src/, and is fetched at runtime rather than
