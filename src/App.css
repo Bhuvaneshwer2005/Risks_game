@@ -3,3 +3,11 @@
   margin: 0 auto;
   padding: 24px;
 }
+
+.app-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100svh;
+  color: var(--text);
+}

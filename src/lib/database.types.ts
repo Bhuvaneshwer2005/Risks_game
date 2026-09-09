@@ -152,6 +152,7 @@ export type Database = {
           has_fortified_this_turn: boolean
           host_user_id: string
           id: string
+          pending_capture: Json | null
           phase: string | null
           reinforcements_remaining: number
           status: string
@@ -166,6 +167,7 @@ export type Database = {
           has_fortified_this_turn?: boolean
           host_user_id: string
           id?: string
+          pending_capture?: Json | null
           phase?: string | null
           reinforcements_remaining?: number
           status?: string
@@ -180,6 +182,7 @@ export type Database = {
           has_fortified_this_turn?: boolean
           host_user_id?: string
           id?: string
+          pending_capture?: Json | null
           phase?: string | null
           reinforcements_remaining?: number
           status?: string

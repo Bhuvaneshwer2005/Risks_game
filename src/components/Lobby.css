@@ -1,0 +1,75 @@
+.lobby {
+  max-width: 480px;
+  margin: 8vh auto 0;
+  padding: 24px;
+  text-align: center;
+}
+
+.lobby-loading {
+  padding: 48px;
+  text-align: center;
+}
+
+.room-code {
+  font-size: 18px;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+
+.room-code span {
+  font-family: var(--mono);
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: 4px;
+  color: var(--accent);
+  margin-left: 8px;
+}
+
+.lobby-hint {
+  color: var(--text);
+  font-size: 14px;
+  margin-bottom: 24px;
+}
+
+.player-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.player-list-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 6px;
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  text-align: left;
+  color: var(--text-h);
+}
+
+.player-list-item--me {
+  border-color: var(--accent);
+}
+
+.player-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.host-tag {
+  margin-left: auto;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--accent);
+  border: 1px solid var(--accent-border);
+  border-radius: 4px;
+  padding: 2px 6px;
+}
