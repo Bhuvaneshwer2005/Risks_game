@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { maxAttackerDice, maxDefenderDice, moveInBounds, resolveAttackRoll } from "../combat";
+import { maxAttackerDice, maxDefenderDice, resolveAttackRoll } from "../combat.ts";
 
 function queueDie(values: number[]) {
   let i = 0;
@@ -52,16 +52,5 @@ describe("resolveAttackRoll", () => {
 
   it("throws on an invalid defender dice count", () => {
     expect(() => resolveAttackRoll(5, 1, 1, 2, queueDie([1, 1, 1]))).toThrow();
-  });
-});
-
-describe("moveInBounds", () => {
-  it("requires at least the dice used, and leaves at least 1 behind", () => {
-    expect(moveInBounds(5, 3)).toEqual({ min: 3, max: 4 });
-  });
-
-  it("clamps the minimum down when dice-used would exceed the max", () => {
-    // only 2 armies remain in origin -> max move is 1, even if 3 dice were used
-    expect(moveInBounds(2, 3)).toEqual({ min: 1, max: 1 });
   });
 });

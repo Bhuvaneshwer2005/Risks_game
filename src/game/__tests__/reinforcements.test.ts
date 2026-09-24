@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { calculateReinforcements, continentsControlledBy, territoryCount } from "../reinforcements";
-import { makeState, withContinent, withOwner } from "./testHelpers";
+import { calculateReinforcements, continentsControlledBy, territoryCount } from "../reinforcements.ts";
+import { makeState, withContinent, withOwner } from "./testHelpers.ts";
 
 describe("territoryCount", () => {
   it("counts only territories owned by the given player", () => {

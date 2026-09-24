@@ -1,16 +1,11 @@
-import { ADJACENCY, type TerritoryId } from "./mapData";
-import type { GameState, PlayerId } from "./types";
+import { ADJACENCY, ALL_TERRITORY_IDS, areAdjacent, type TerritoryId } from "./mapData.ts";
+import type { CoreState, FortifyRule, PlayerId } from "./types.ts";
 
-// Fortify moves aren't limited to directly-adjacent territories - classic
-// Risk lets you move through any unbroken chain of territories you own. So
-// this is a BFS over the subgraph of territories owned by `playerId`,
-// starting from `from`, checking whether `to` is reachable at all.
-export function isFortifyPathConnected(
-  state: GameState,
-  playerId: PlayerId,
-  from: TerritoryId,
-  to: TerritoryId,
-): boolean {
+type Board = Pick<CoreState, "territories">;
+
+// BFS over the territories owned by `playerId`, starting from `from`: is `to`
+// reachable through an unbroken chain of that player's territories?
+export function isFortifyPathConnected(state: Board, playerId: PlayerId, from: TerritoryId, to: TerritoryId): boolean {
   if (from === to) return false;
   if (state.territories[from].owner !== playerId || state.territories[to].owner !== playerId) {
     return false;
@@ -31,26 +26,19 @@ export function isFortifyPathConnected(
   return false;
 }
 
-export interface FortifyMove {
-  from: TerritoryId;
-  to: TerritoryId;
-  armies: number;
+/** Whether `playerId` may fortify from one territory to another under the given rule (army counts aside). */
+export function canFortifyBetween(
+  state: Board,
+  rule: FortifyRule,
+  playerId: PlayerId,
+  from: TerritoryId,
+  to: TerritoryId,
+): boolean {
+  if (from === to) return false;
+  if (state.territories[from].owner !== playerId || state.territories[to].owner !== playerId) return false;
+  return rule === "adjacent" ? areAdjacent(from, to) : isFortifyPathConnected(state, playerId, from, to);
 }
 
-export function validateFortify(state: GameState, playerId: PlayerId, move: FortifyMove): string | null {
-  if (state.hasFortifiedThisTurn) return "Already fortified this turn";
-  if (move.armies < 1) return "Must move at least 1 army";
-  const fromArmies = state.territories[move.from]?.armies ?? 0;
-  if (fromArmies - move.armies < 1) return "Must leave at least 1 army behind";
-  if (!isFortifyPathConnected(state, playerId, move.from, move.to)) {
-    return "No unbroken chain of owned territories connects these two";
-  }
-  return null;
-}
-
-export function applyFortify(state: GameState, move: FortifyMove): GameState {
-  const territories = { ...state.territories };
-  territories[move.from] = { ...territories[move.from], armies: territories[move.from].armies - move.armies };
-  territories[move.to] = { ...territories[move.to], armies: territories[move.to].armies + move.armies };
-  return { ...state, territories, hasFortifiedThisTurn: true };
+export function fortifyTargets(state: Board, rule: FortifyRule, playerId: PlayerId, from: TerritoryId): TerritoryId[] {
+  return ALL_TERRITORY_IDS.filter((to) => canFortifyBetween(state, rule, playerId, from, to));
 }

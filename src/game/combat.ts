@@ -1,7 +1,6 @@
 // Combat resolution. Dice rolling is injected via `rollDie` so tests get
-// deterministic outcomes and the real server (Supabase Edge Function) can
-// wire in a cryptographically secure die - this module never decides *how*
-// randomness is produced, only what the rules do with the results.
+// deterministic outcomes and the server can wire in a cryptographically
+// secure die - this module only decides what the rules do with the results.
 
 export type RollDie = () => number; // must return an integer in [1, 6]
 
@@ -46,9 +45,7 @@ export function resolveAttackRoll(
   let attackerLosses = 0;
   let defenderLosses = 0;
   for (let i = 0; i < pairs; i++) {
-    // Ties are won by the defender - this is the single most-forgotten Risk
-    // rule, so it gets called out explicitly rather than left implicit in a
-    // ">=" comparison.
+    // Ties are won by the defender.
     if (attackerDice[i] > defenderDice[i]) {
       defenderLosses++;
     } else {
@@ -57,17 +54,4 @@ export function resolveAttackRoll(
   }
 
   return { attackerDice, defenderDice, attackerLosses, defenderLosses };
-}
-
-// After a winning attack that drops the defender to 0 armies, the attacker
-// must move in at least as many armies as dice they attacked with in that
-// final roll, and may move more - up to all but one of what's left in the
-// origin territory (one must always stay behind).
-export function moveInBounds(
-  attackerArmiesRemainingInOrigin: number,
-  diceUsedInFinalRoll: number,
-): { min: number; max: number } {
-  const max = attackerArmiesRemainingInOrigin - 1;
-  const min = Math.min(diceUsedInFinalRoll, max);
-  return { min, max };
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ADJACENCY, ALL_TERRITORY_IDS, CONTINENTS, TERRITORIES, territoriesInContinent } from "../mapData";
+import { ADJACENCY, ALL_TERRITORY_IDS, CONTINENTS, TERRITORIES, territoriesInContinent } from "../mapData.ts";
 
 describe("mapData", () => {
   it("has exactly 42 territories", () => {
