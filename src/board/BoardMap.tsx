@@ -166,7 +166,7 @@ export function BoardMap(props: BoardMapProps) {
       )}
 
       {hover && territories && (
-        <div className={styles.tooltip} style={{ left: hover.x, top: hover.y }}>
+        <div className={`${styles.tooltip} ${hover.x > window.innerWidth - 240 ? styles.tooltipLeft : ""}`} style={{ left: hover.x, top: hover.y }}>
           <div className={styles.tooltipName}>{TERRITORIES[hover.id].name}</div>
           <div className={styles.tooltipMeta}>{CONTINENTS[TERRITORIES[hover.id].continent].name}</div>
           {hovered && (

@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { ADJACENCY, CONTINENTS, type TerritoryId } from "../../game/mapData.ts";
 import { allValidSets } from "../../game/cards.ts";
 import { attackTargets, canAttackFrom, fortifyTargets, playerSummaries, territoriesOf } from "../../game/selectors.ts";
 import type { GameAction, GameEvent, Placements, PlayerId, PublicState } from "../../game/types.ts";
-import { BoardMap, type BoardArrow } from "../../board/BoardMap.tsx";
+import { BoardMap, type BoardArrow, type BoardMapProps } from "../../board/BoardMap.tsx";
+import { webglAvailable } from "../../board/webgl.ts";
 import type { GameConnection } from "../../net/connection.ts";
 import { sfx } from "../../audio/sfx.ts";
 import { setPrefs, usePrefs } from "../../state/prefs.ts";
@@ -17,6 +18,22 @@ import { describeEvent, playerName } from "./describe.ts";
 import styles from "./game.module.css";
 
 type Battle = Extract<GameEvent, { type: "battle" }>;
+
+// three.js is large, so the 3D board loads in its own chunk when a game opens.
+const Board3D = lazy(() => import("../../board/Board3D.tsx"));
+const WEBGL = webglAvailable();
+
+/** The 3D board when the player wants it and the browser supports it, otherwise the 2D map. */
+function GameBoard(props: BoardMapProps & { prefer3d: boolean }) {
+  const { prefer3d, ...board } = props;
+  const [failed, setFailed] = useState(false);
+  if (!prefer3d || !WEBGL || failed) return <BoardMap {...board} />;
+  return (
+    <Suspense fallback={<div className={styles.boardLoading} />}>
+      <Board3D {...board} onUnsupported={() => setFailed(true)} />
+    </Suspense>
+  );
+}
 
 export function GameScreen({ connection, onExit }: { connection: GameConnection; onExit: () => void }) {
   const snap = useSyncExternalStore(connection.subscribe, connection.getSnapshot);
@@ -321,7 +338,8 @@ function GameView({ connection, game, onExit }: { connection: GameConnection; ga
   return (
     <div className={styles.screen}>
       <div className={styles.board}>
-        <BoardMap
+        <GameBoard
+          prefer3d={prefs.board3d}
           territories={game.territories}
           players={game.players}
           selected={from}
@@ -369,6 +387,13 @@ function GameView({ connection, game, onExit }: { connection: GameConnection; ga
           )}
         </div>
         <div className={styles.topActions}>
+          {WEBGL && (
+            <IconButton
+              icon={prefs.board3d ? "map" : "cube"}
+              label={prefs.board3d ? "Switch to the flat map" : "Switch to the 3D map"}
+              onClick={() => setPrefs({ board3d: !prefs.board3d })}
+            />
+          )}
           <IconButton icon="book" label="Rules" onClick={() => setRulesOpen(true)} />
           <IconButton icon={prefs.muted ? "soundOff" : "soundOn"} label={prefs.muted ? "Unmute" : "Mute"} onClick={() => setPrefs({ muted: !prefs.muted })} />
           <IconButton icon={panelOpen ? "close" : "cards"} label={panelOpen ? "Hide cards and log" : "Show cards and log"} onClick={() => setPanelOpen((o) => !o)} />

@@ -8,19 +8,22 @@ export interface Prefs {
   name: string;
   color: string;
   muted: boolean;
+  /** Show the 3D board (falls back to 2D when WebGL isn't available). */
+  board3d: boolean;
 }
 
 const KEY = "risk.prefs.v2";
+const DEFAULTS: Prefs = { name: "", color: DEFAULT_COLOR, muted: false, board3d: true };
 const listeners = new Set<() => void>();
 
 function read(): Prefs {
   try {
     const raw = localStorage.getItem(KEY);
-    if (raw) return { name: "", color: DEFAULT_COLOR, muted: false, ...(JSON.parse(raw) as Partial<Prefs>) };
+    if (raw) return { ...DEFAULTS, ...(JSON.parse(raw) as Partial<Prefs>) };
   } catch {
     // fall through to defaults
   }
-  return { name: "", color: DEFAULT_COLOR, muted: false };
+  return { ...DEFAULTS };
 }
 
 let current = read();

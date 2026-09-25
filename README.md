@@ -20,7 +20,7 @@ Open http://localhost:5173, enter a name, then either **Create online game** (sh
 | Part | Where | Notes |
 |---|---|---|
 | Rules engine | `src/game/` | One pure reducer, `applyAction(state, action, ctx)`. Every rule and phase check lives here. |
-| Board | `scripts/board/`, `src/board/` | Hand-drawn coastlines split into territories with a weighted Voronoi diagram, rendered as SVG with pan and zoom. |
+| Board | `scripts/board/`, `src/board/` | Real Natural Earth coastlines grouped into the 42 territories, rendered as a 3D board (three.js) you can pan, tilt and zoom, with a 2D SVG fallback. |
 | UI | `src/screens/`, `src/ui/` | React 19 with CSS modules and design tokens in `src/styles/`. No UI framework. |
 | Online | `src/net/online.ts`, `supabase/` | Supabase anonymous auth, one Edge Function, Postgres with RLS, and Realtime. |
 
@@ -32,8 +32,7 @@ Open http://localhost:5173, enter a name, then either **Create online game** (sh
 |---|---|
 | `npm test` | Rules and phase tests, a random full-game fuzz test (`FUZZ_GAMES=200 npm test` runs a deeper pass), board geometry checks, and the engine-copy check. |
 | `npm run build` | Type-checks and builds to `dist/`. |
-| `npm run build:board` | Rebuilds `src/board/geometry.json` from `scripts/board/source.mjs` and fails if any border doesn't match the classic board. Add `-- --preview` for `scripts/board/preview.html`. |
-| `npm run tune:board -- --write` | Searches seed positions and weights until the territory borders match. Use it after editing coastlines. |
+| `npm run build:board` | Rebuilds `src/board/geometry.json` from the Natural Earth outlines in `world-atlas` and fails if any border doesn't match the classic board. Country-to-territory rules live at the top of `scripts/board/build.mjs`. |
 | `npm run sync:engine` | Copies `src/game` into the Edge Function. Run it after any engine change. `npm test` fails if you forget. |
 
 ## Deploying the backend

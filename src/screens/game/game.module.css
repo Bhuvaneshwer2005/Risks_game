@@ -756,3 +756,9 @@
     min-width: 0;
   }
 }
+
+.boardLoading {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse at 50% 42%, #10213b, #050a14 75%);
+}
