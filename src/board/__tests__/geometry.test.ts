@@ -14,7 +14,8 @@ describe("board geometry", () => {
       expect(x).toBeLessThan(BOARD.width);
       expect(y).toBeGreaterThan(0);
       expect(y).toBeLessThan(BOARD.height);
-      expect(t.clearance, id).toBeGreaterThanOrEqual(7);
+      // Real coastlines make some islands narrow (Honshu is ~5 units wide at the label).
+      expect(t.clearance, id).toBeGreaterThanOrEqual(5);
     }
   });
 

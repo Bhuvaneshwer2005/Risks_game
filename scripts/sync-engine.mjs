@@ -19,12 +19,15 @@ export function engineFiles() {
     .sort();
 }
 
+// Git on Windows may check the two copies out with different line endings.
+const normalized = (path) => readFileSync(path, "utf8").replace(/\r\n/g, "\n");
+
 export function staleFiles() {
   const expected = engineFiles();
   const stale = [];
   for (const f of expected) {
     const dest = join(ENGINE_DEST, f);
-    if (!existsSync(dest) || !readFileSync(dest).equals(readFileSync(join(ENGINE_SRC, f)))) stale.push(f);
+    if (!existsSync(dest) || normalized(dest) !== normalized(join(ENGINE_SRC, f))) stale.push(f);
   }
   const extra = existsSync(ENGINE_DEST) ? readdirSync(ENGINE_DEST).filter((f) => !expected.includes(f)) : [];
   return [...stale, ...extra];

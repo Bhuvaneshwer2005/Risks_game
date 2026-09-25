@@ -10,22 +10,25 @@
     "preview": "vite preview",
     "test": "vitest run",
     "build:board": "node scripts/board/build.mjs",
-    "tune:board": "node scripts/board/tune.mjs",
     "sync:engine": "node scripts/sync-engine.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.116.0",
     "react": "^19.2.8",
-    "react-dom": "^19.2.8"
+    "react-dom": "^19.2.8",
+    "three": "^0.169.0"
   },
   "devDependencies": {
     "@types/node": "^24.13.3",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
+    "@types/three": "^0.169.0",
     "@vitejs/plugin-react": "^6.1.0",
     "oxlint": "^1.79.0",
+    "topojson-client": "^3.1.0",
     "typescript": "~6.0.2",
     "vite": "^8.2.2",
-    "vitest": "^5.0.0"
+    "vitest": "^5.0.0",
+    "world-atlas": "^2.0.2"
   }
 }
