@@ -1,65 +1,120 @@
-import { useEffect, useState } from "react";
-import { Landing } from "./components/Landing";
-import { Lobby } from "./components/Lobby";
-import { GameView } from "./components/GameView";
-import { ensureSignedIn, supabase } from "./lib/supabaseClient";
-import { useGameRoom } from "./hooks/useGameRoom";
-import "./App.css";
+import { useEffect, useState, useSyncExternalStore } from "react";
+import type { GameConnection } from "./net/connection.ts";
+import { LocalConnection } from "./net/local.ts";
+import type { OnlineConnection } from "./net/online.ts";
+import { getSavedRoom } from "./net/savedRoom.ts";
+import { getPrefs } from "./state/prefs.ts";
+import { Home } from "./screens/Home.tsx";
+import { LocalSetup } from "./screens/LocalSetup.tsx";
+import { Lobby } from "./screens/Lobby.tsx";
+import { GameScreen } from "./screens/game/GameScreen.tsx";
+import { ToastProvider } from "./ui/index.tsx";
+import { useToast } from "./ui/toast.ts";
+import styles from "./screens/screens.module.css";
 
-const STORAGE_KEY = "risk-online-room";
+type Route =
+  | { name: "home" }
+  | { name: "local-setup" }
+  | { name: "local"; connection: LocalConnection }
+  | { name: "online"; connection: OnlineConnection };
 
-// useGameRoom opens one realtime channel per call - it's called exactly
-// once here, with the live data threaded down as props, rather than having
-// Lobby/GameView each subscribe independently (which briefly raced two
-// channels for the same room under StrictMode's double-mount and crashed
-// with "cannot add postgres_changes callbacks... after subscribe()").
-function RoomRouter({ roomId, myUserId }: { roomId: string; myUserId: string }) {
-  const roomData = useGameRoom(roomId, myUserId);
-  if (roomData.loading || !roomData.room) return <div className="app-loading">Loading…</div>;
-  return roomData.room.status === "lobby" ? (
-    <Lobby roomId={roomId} myUserId={myUserId} data={roomData} />
-  ) : (
-    <GameView roomId={roomId} myUserId={myUserId} data={roomData} />
-  );
+// Online play (and the Supabase client) loads only when it's needed.
+const loadOnline = () => import("./net/online.ts");
+
+function roomCodeFromUrl(): string | undefined {
+  const code = new URLSearchParams(location.search).get("room");
+  return code ? code.toUpperCase().slice(0, 6) : undefined;
 }
 
-function App() {
-  const [userId, setUserId] = useState<string | null>(null);
-  const [roomId, setRoomId] = useState<string | null>(null);
+function clearRoomFromUrl() {
+  if (location.search) history.replaceState(null, "", location.pathname);
+}
 
+function OnlineRoom({ connection, onExit }: { connection: OnlineConnection; onExit: () => void }) {
+  const snap = useSyncExternalStore(connection.subscribe, connection.getSnapshot);
+  const toast = useToast();
   useEffect(() => {
-    ensureSignedIn().then(setUserId);
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) setRoomId(saved);
+    if (!snap.error) return;
+    toast(snap.error, "error");
+    // The room is really gone (not just a network hiccup): back to the home screen.
+    if (snap.view === "connecting" && !getSavedRoom()) onExit();
+  }, [snap.error, snap.view, toast, onExit]);
+  if (snap.view === "lobby") return <Lobby connection={connection} onExit={onExit} />;
+  if (snap.view === "game") return <GameScreen connection={connection as GameConnection} onExit={onExit} />;
+  return <div className={styles.connecting}>Connecting to the war room…</div>;
+}
+
+function Router() {
+  const toast = useToast();
+  const [route, setRoute] = useState<Route>({ name: "home" });
+  const [busy, setBusy] = useState(false);
+  const [initialCode] = useState(roomCodeFromUrl);
+
+  // Reconnect to an online game after a reload.
+  useEffect(() => {
+    if (!getSavedRoom()) return;
+    let cancelled = false;
+    loadOnline()
+      .then((m) => m.OnlineConnection.resume())
+      .then((connection) => {
+        if (connection && !cancelled) setRoute({ name: "online", connection });
+        else connection?.dispose();
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  useEffect(() => {
-    if (roomId) localStorage.setItem(STORAGE_KEY, roomId);
-    else localStorage.removeItem(STORAGE_KEY);
-  }, [roomId]);
+  const goHome = () => {
+    if (route.name === "local" || route.name === "online") route.connection.dispose();
+    setRoute({ name: "home" });
+  };
 
-  // Cheap safety net: if the saved room turns out not to exist (or this
-  // user isn't in it), fall back to the landing page instead of showing a
-  // permanent loading spinner.
-  useEffect(() => {
-    if (!roomId) return;
-    supabase
-      .from("rooms")
-      .select("id")
-      .eq("id", roomId)
-      .maybeSingle()
-      .then(({ data }) => {
-        if (!data) setRoomId(null);
-      });
-  }, [roomId]);
+  const goOnline = async (open: () => Promise<OnlineConnection>) => {
+    setBusy(true);
+    try {
+      const connection = await open();
+      clearRoomFromUrl();
+      setRoute({ name: "online", connection });
+    } catch (e) {
+      toast((e as Error).message, "error");
+    } finally {
+      setBusy(false);
+    }
+  };
 
-  if (!userId) return <div className="app-loading">Connecting…</div>;
-
-  if (!roomId) {
-    return <Landing onEnter={(id) => setRoomId(id)} />;
+  switch (route.name) {
+    case "home":
+      return (
+        <Home
+          initialCode={initialCode}
+          canResume={LocalConnection.hasSaved()}
+          onlineAvailable
+          busy={busy}
+          onCreateOnline={() => void goOnline(async () => (await loadOnline()).OnlineConnection.create(getPrefs().name.trim(), getPrefs().color))}
+          onJoinOnline={(code) => void goOnline(async () => (await loadOnline()).OnlineConnection.join(code, getPrefs().name.trim(), getPrefs().color))}
+          onPlayLocal={() => setRoute({ name: "local-setup" })}
+          onResumeLocal={() => {
+            const connection = LocalConnection.restore();
+            if (connection) setRoute({ name: "local", connection });
+            else toast("That saved game couldn't be loaded.", "error");
+          }}
+        />
+      );
+    case "local-setup":
+      return <LocalSetup onBack={goHome} onStart={(players, settings) => setRoute({ name: "local", connection: LocalConnection.create(players, settings) })} />;
+    case "local":
+      return <GameScreen connection={route.connection} onExit={goHome} />;
+    case "online":
+      return <OnlineRoom key={route.connection.roomId} connection={route.connection} onExit={goHome} />;
   }
-
-  return <RoomRouter roomId={roomId} myUserId={userId} />;
 }
 
-export default App;
+export default function App() {
+  return (
+    <ToastProvider>
+      <Router />
+    </ToastProvider>
+  );
+}

@@ -8,7 +8,10 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "vitest run",
+    "build:board": "node scripts/board/build.mjs",
+    "tune:board": "node scripts/board/tune.mjs",
+    "sync:engine": "node scripts/sync-engine.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.116.0",

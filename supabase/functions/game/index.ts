@@ -1,25 +1,17 @@
-// Single Edge Function acting as the whole game API, routed by an `action`
-// field in the request body instead of one function per action - Supabase
-// Edge Functions don't share code between separate function deployments
-// without re-uploading it every time, so this keeps the rules engine (and
-// its Deno-side copy under _shared/) defined exactly once.
+// The whole online game API as one Edge Function, routed by `op`.
 //
-// Every handler below follows the same shape: load the room's current state
-// from Postgres, rebuild it into the same GameState shape the pure engine
-// in _shared/engine.ts already operates on and is unit-tested against,
-// call the engine function that actually enforces the rule, then persist
-// whatever it returns. The engine never trusts the client for anything - a
-// request can't act out of turn, attack past what its armies allow, or
-// fabricate a dice roll, because every check the engine makes runs here,
-// server-side, before a single row is written.
+// Every game move runs the same rules engine the client and tests use
+// (_engine/, a byte-for-byte copy of src/game made by scripts/sync-engine.mjs)
+// and is committed atomically with a version check, so concurrent requests
+// can't overwrite each other. Clients can only read; all writes happen here.
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2";
-import { ALL_TERRITORY_IDS, type TerritoryId } from "./_shared/mapData.ts";
-import * as engine from "./_shared/engine.ts";
-import { CARD_TYPES, cardSetBonusArmies, isValidCardSet, territoryBonusForSet } from "./_shared/cards.ts";
-import { applyFortify, validateFortify } from "./_shared/fortify.ts";
-import type { Card, GameState, PlayerId } from "./_shared/types.ts";
+import { createClient } from "npm:@supabase/supabase-js@2";
+import { MAX_PLAYERS, MIN_PLAYERS, RuleError, applyAction, createGame } from "./_engine/engine.ts";
+import { toPublicState } from "./_engine/state.ts";
+import { DEFAULT_SETTINGS } from "./_engine/types.ts";
+import { commit, loadRoom, loadSeats, transact, type Db, type RoomRow } from "./db.ts";
+import { BadRequest, parseAction, parseCode, parseColor, parseName, parseSettings, parseUuid } from "./validate.ts";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -27,27 +19,17 @@ const CORS_HEADERS = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
-function json(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), { status, headers: { ...CORS_HEADERS, "Content-Type": "application/json" } });
+function json(body: Record<string, unknown>, status = 200): Response {
+  return new Response(JSON.stringify({ ...body, serverTime: Date.now() }), {
+    status,
+    headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
+  });
 }
 
 function secureRandom(): number {
   const buf = new Uint32Array(1);
   crypto.getRandomValues(buf);
   return buf[0] / 2 ** 32;
-}
-
-function rollDie(): number {
-  return 1 + Math.floor(secureRandom() * 6);
-}
-
-function shuffleWith<T>(arr: T[], random: () => number): T[] {
-  const copy = [...arr];
-  for (let i = copy.length - 1; i > 0; i--) {
-    const j = Math.floor(random() * (i + 1));
-    [copy[i], copy[j]] = [copy[j], copy[i]];
-  }
-  return copy;
 }
 
 const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // no 0/O/1/I - easy to read aloud
@@ -57,468 +39,201 @@ function randomRoomCode(): string {
   return code;
 }
 
-type Db = SupabaseClient<any, "public", any>;
+// deno-lint-ignore no-explicit-any
+type Body = Record<string, any>;
 
-interface RoomRow {
-  id: string;
-  code: string;
-  status: string;
-  host_user_id: string;
-  current_player_id: string | null;
-  phase: string | null;
-  reinforcements_remaining: number;
-  conquered_this_turn: boolean;
-  has_fortified_this_turn: boolean;
-  card_sets_traded: number;
-  winner_player_id: string | null;
-  pending_capture: { from: TerritoryId; to: TerritoryId; diceUsed: number } | null;
+async function requireSeat(db: Db, roomId: string, userId: string) {
+  const { data, error } = await db.from("room_players").select("*").eq("room_id", roomId).eq("user_id", userId).maybeSingle();
+  if (error) throw error;
+  if (!data) throw new BadRequest("You're not in this game");
+  return data;
 }
 
-interface PlayerRow {
-  id: string;
-  room_id: string;
-  user_id: string;
-  name: string;
-  color: string;
-  turn_order: number | null;
-  eliminated: boolean;
-  card_count: number;
+function requireHost(room: RoomRow, userId: string) {
+  if (room.host_user_id !== userId) throw new BadRequest("Only the host can do that");
 }
 
-interface TerritoryRow {
-  room_id: string;
-  territory_id: string;
-  owner_player_id: string | null;
-  armies: number;
+function requireLobby(room: RoomRow) {
+  if (room.status !== "lobby") throw new BadRequest("The game has already started");
 }
 
-async function loadRoom(db: Db, roomId: string) {
-  const { data: room, error } = await db.from("rooms").select("*").eq("id", roomId).single();
-  if (error || !room) throw new Error("Room not found");
-  const { data: players } = await db.from("players").select("*").eq("room_id", roomId);
-  const { data: territoryRows } = await db.from("territory_state").select("*").eq("room_id", roomId);
-  return { room: room as RoomRow, players: (players ?? []) as PlayerRow[], territoryRows: (territoryRows ?? []) as TerritoryRow[] };
-}
+// ---------- lobby ----------
 
-function findPlayerId(players: PlayerRow[], userId: string): PlayerId {
-  const p = players.find((p) => p.user_id === userId);
-  if (!p) throw new Error("You're not seated in this room");
-  return p.id;
-}
-
-function buildGameState(room: RoomRow, players: PlayerRow[], territoryRows: TerritoryRow[]): GameState {
-  const turnOrder = players
-    .filter((p) => p.turn_order !== null)
-    .sort((a, b) => (a.turn_order as number) - (b.turn_order as number))
-    .map((p) => p.id);
-
-  const territories = {} as GameState["territories"];
-  for (const row of territoryRows) {
-    territories[row.territory_id as TerritoryId] = { owner: row.owner_player_id, armies: row.armies };
+async function createRoom(db: Db, userId: string, body: Body) {
+  const name = parseName(body.name);
+  const color = parseColor(body.color);
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const code = randomRoomCode();
+    const { data: room, error } = await db
+      .from("rooms")
+      .insert({ code, host_user_id: userId, settings: DEFAULT_SETTINGS })
+      .select("id, code")
+      .single();
+    if (error?.code === "23505") continue; // code collision, try another
+    if (error) throw error;
+    const { error: seatError } = await db.from("room_players").insert({ room_id: room.id, user_id: userId, seat: 0, name, color });
+    if (seatError) throw seatError;
+    return json({ ok: true, roomId: room.id, code: room.code });
   }
-
-  const hands = Object.fromEntries(players.map((p) => [p.id, [] as Card[]]));
-
-  return {
-    players: players.map((p) => ({ id: p.id, name: p.name, color: p.color, eliminated: p.eliminated })),
-    turnOrder,
-    currentPlayerIndex: room.current_player_id ? Math.max(0, turnOrder.indexOf(room.current_player_id)) : 0,
-    phase: (room.phase ?? "reinforce") as GameState["phase"],
-    territories,
-    reinforcementsRemaining: room.reinforcements_remaining,
-    conqueredThisTurn: room.conquered_this_turn,
-    hasFortifiedThisTurn: room.has_fortified_this_turn,
-    hands,
-    cardSetsTraded: room.card_sets_traded,
-    winnerId: room.winner_player_id,
-  };
+  throw new Error("Couldn't find a free room code, try again");
 }
 
-async function saveState(db: Db, roomId: string, state: GameState) {
-  const territoryRows = ALL_TERRITORY_IDS.map((id) => ({
-    room_id: roomId,
-    territory_id: id,
-    owner_player_id: state.territories[id].owner,
-    armies: state.territories[id].armies,
-  }));
-  const { error: tErr } = await db.from("territory_state").upsert(territoryRows, { onConflict: "room_id,territory_id" });
-  if (tErr) throw tErr;
-
-  await Promise.all(state.players.map((p) => db.from("players").update({ eliminated: p.eliminated }).eq("id", p.id)));
-
-  const { error: rErr } = await db
-    .from("rooms")
-    .update({
-      phase: state.phase,
-      current_player_id: state.turnOrder[state.currentPlayerIndex] ?? null,
-      reinforcements_remaining: state.reinforcementsRemaining,
-      conquered_this_turn: state.conqueredThisTurn,
-      has_fortified_this_turn: state.hasFortifiedThisTurn,
-      card_sets_traded: state.cardSetsTraded,
-      winner_player_id: state.winnerId,
-      status: state.winnerId ? "finished" : "in_progress",
-    })
-    .eq("id", roomId);
-  if (rErr) throw rErr;
-}
-
-// players.card_count is denormalized for cheap realtime reads (no client
-// ever needs to see the cards table to know "opponent has 3 cards"), so
-// recompute it from the actual cards table after anything that could have
-// moved a card - simpler and less bug-prone than incrementing/decrementing
-// it inline at every call site.
-async function syncCardCounts(db: Db, roomId: string) {
-  const { data: players } = await db.from("players").select("id").eq("room_id", roomId);
-  const { data: cards } = await db.from("cards").select("owner_player_id").eq("room_id", roomId).not("owner_player_id", "is", null);
-  const counts = new Map<string, number>();
-  for (const c of cards ?? []) counts.set(c.owner_player_id as string, (counts.get(c.owner_player_id as string) ?? 0) + 1);
-  await Promise.all((players ?? []).map((p) => db.from("players").update({ card_count: counts.get(p.id) ?? 0 }).eq("id", p.id)));
-}
-
-async function logMove(db: Db, roomId: string, playerId: string | null, type: string, payload: unknown) {
-  await db.from("moves_log").insert({ room_id: roomId, player_id: playerId, type, payload: payload ?? {} });
-}
-
-// ---- action handlers ----
-
-async function createRoom(db: Db, userId: string, body: any) {
-  const name = String(body.name ?? "").trim().slice(0, 24);
-  const color = String(body.color ?? "#888888");
-  if (!name) throw new Error("Name is required");
-
-  let roomId = "";
-  let code = "";
-  for (let attempt = 0; attempt < 5 && !roomId; attempt++) {
-    code = randomRoomCode();
-    const { data, error } = await db.from("rooms").insert({ code, host_user_id: userId }).select("id").single();
-    if (!error && data) roomId = data.id;
-    else if (error && (error as any).code !== "23505") throw error;
-  }
-  if (!roomId) throw new Error("Could not allocate a room code - try again");
-
-  const { data: player, error: playerErr } = await db
-    .from("players")
-    .insert({ room_id: roomId, user_id: userId, name, color })
-    .select("id")
-    .single();
-  if (playerErr) throw playerErr;
-
-  return json({ ok: true, roomId, code, playerId: player.id });
-}
-
-async function joinRoom(db: Db, userId: string, body: any) {
-  const code = String(body.code ?? "").trim().toUpperCase();
-  const name = String(body.name ?? "").trim().slice(0, 24);
-  const color = String(body.color ?? "#888888");
-  if (!name) throw new Error("Name is required");
-
-  const { data: room, error } = await db.from("rooms").select("*").eq("code", code).single();
-  if (error || !room) throw new Error("Room not found");
-  if (room.status !== "lobby") throw new Error("That game has already started");
-
-  const { data: existingPlayers } = await db.from("players").select("id,user_id,color").eq("room_id", room.id);
-  const already = existingPlayers?.find((p) => p.user_id === userId);
-  if (already) return json({ ok: true, roomId: room.id, playerId: already.id, code: room.code });
-
-  if ((existingPlayers?.length ?? 0) >= 6) throw new Error("Room is full");
-  if (existingPlayers?.some((p) => p.color === color)) throw new Error("That color is already taken in this room");
-
-  const { data: player, error: playerErr } = await db
-    .from("players")
-    .insert({ room_id: room.id, user_id: userId, name, color })
-    .select("id")
-    .single();
-  if (playerErr) throw playerErr;
-
-  return json({ ok: true, roomId: room.id, playerId: player.id, code: room.code });
-}
-
-async function startGame(db: Db, userId: string, body: any) {
-  const roomId = String(body.roomId);
-  const { room, players } = await loadRoom(db, roomId);
-  if (room.host_user_id !== userId) throw new Error("Only the host can start the game");
-  if (room.status !== "lobby") throw new Error("Game already started");
-  if (players.length < 2) throw new Error("Need at least 2 players");
-  if (players.length > 6) throw new Error("Risk supports at most 6 players");
-
-  const state = engine.createGame({
-    players: players.map((p) => ({ id: p.id, name: p.name, color: p.color })),
-    random: secureRandom,
+async function joinRoom(db: Db, userId: string, body: Body) {
+  const { data, error } = await db.rpc("join_room", {
+    p_code: parseCode(body.code),
+    p_user: userId,
+    p_name: parseName(body.name),
+    p_color: parseColor(body.color),
   });
-
-  await Promise.all(state.turnOrder.map((pid, idx) => db.from("players").update({ turn_order: idx }).eq("id", pid)));
-
-  const territoryRows = ALL_TERRITORY_IDS.map((id) => ({
-    room_id: roomId,
-    territory_id: id,
-    owner_player_id: state.territories[id].owner,
-    armies: state.territories[id].armies,
-  }));
-  const { error: tErr } = await db.from("territory_state").upsert(territoryRows, { onConflict: "room_id,territory_id" });
-  if (tErr) throw tErr;
-
-  // 42 territory cards (cycled evenly across the 3 unit types) + 2 wilds,
-  // shuffled into a deck_position order.
-  const deck: { territory_id: string | null; card_type: string }[] = ALL_TERRITORY_IDS.map((id, i) => ({
-    territory_id: id,
-    card_type: CARD_TYPES[i % 3],
-  }));
-  deck.push({ territory_id: null, card_type: "wild" }, { territory_id: null, card_type: "wild" });
-  const shuffledDeck = shuffleWith(deck, secureRandom);
-  const cardRows = shuffledDeck.map((c, i) => ({ room_id: roomId, territory_id: c.territory_id, card_type: c.card_type, deck_position: i }));
-  const { error: cErr } = await db.from("cards").insert(cardRows);
-  if (cErr) throw cErr;
-
-  const { error: rErr } = await db
-    .from("rooms")
-    .update({ status: "in_progress", phase: "reinforce", current_player_id: state.turnOrder[0], reinforcements_remaining: state.reinforcementsRemaining })
-    .eq("id", roomId);
-  if (rErr) throw rErr;
-
-  await logMove(db, roomId, null, "game_started", { playerCount: players.length });
-  return json({ ok: true });
+  if (error) throw new BadRequest(error.message);
+  const joined = (data as { joined_room: string }[])[0];
+  const room = await loadRoom(db, joined.joined_room);
+  return json({ ok: true, roomId: room.id, code: room.code });
 }
 
-async function reinforce(db: Db, userId: string, body: any) {
-  const roomId = String(body.roomId);
-  const territoryId = body.territoryId as TerritoryId;
-  const count = Number(body.count);
-  const { room, players, territoryRows } = await loadRoom(db, roomId);
-  const playerId = findPlayerId(players, userId);
-  if (room.current_player_id !== playerId) throw new Error("Not your turn");
+async function leaveRoom(db: Db, userId: string, body: Body) {
+  const roomId = parseUuid(body.roomId, "roomId");
+  const room = await loadRoom(db, roomId);
+  // In a game you resign (an engine action) and simply stop watching; your
+  // seat stays so the board keeps your name on your old armies.
+  if (room.status !== "lobby") return json({ ok: true });
 
-  const state = engine.placeReinforcement(buildGameState(room, players, territoryRows), territoryId, count);
-  await saveState(db, roomId, state);
-  await logMove(db, roomId, playerId, "reinforce", { territoryId, count });
-  return json({ ok: true });
-}
-
-async function finishReinforcingAction(db: Db, userId: string, body: any) {
-  const roomId = String(body.roomId);
-  const { room, players, territoryRows } = await loadRoom(db, roomId);
-  const playerId = findPlayerId(players, userId);
-  if (room.current_player_id !== playerId) throw new Error("Not your turn");
-
-  const state = engine.finishReinforcing(buildGameState(room, players, territoryRows));
-  await saveState(db, roomId, state);
-  return json({ ok: true });
-}
-
-async function attack(db: Db, userId: string, body: any) {
-  const roomId = String(body.roomId);
-  const from = body.from as TerritoryId;
-  const to = body.to as TerritoryId;
-  const attackerDice = Number(body.attackerDice);
-  const defenderDice = Number(body.defenderDice);
-  const { room, players, territoryRows } = await loadRoom(db, roomId);
-  const playerId = findPlayerId(players, userId);
-  if (room.current_player_id !== playerId) throw new Error("Not your turn");
-  if (room.pending_capture) throw new Error("Resolve the pending move-in first");
-
-  const defenderIdBeforeAttack = territoryRows.find((t) => t.territory_id === to)?.owner_player_id ?? null;
-
-  const outcome = engine.applyAttack(buildGameState(room, players, territoryRows), from, to, attackerDice, defenderDice, rollDie);
-  await saveState(db, roomId, outcome.state);
-
-  const pendingCapture = outcome.captured ? { from, to, diceUsed: attackerDice } : null;
-  const { error: pErr } = await db.from("rooms").update({ pending_capture: pendingCapture }).eq("id", roomId);
-  if (pErr) throw pErr;
-
-  if (outcome.defenderEliminated && defenderIdBeforeAttack) {
-    const { error: xferErr } = await db
-      .from("cards")
-      .update({ owner_player_id: playerId })
-      .eq("room_id", roomId)
-      .eq("owner_player_id", defenderIdBeforeAttack);
-    if (xferErr) throw xferErr;
+  await db.from("room_players").delete().eq("room_id", roomId).eq("user_id", userId);
+  const seats = await loadSeats(db, roomId);
+  if (seats.length === 0) {
+    await db.from("rooms").delete().eq("id", roomId);
+  } else if (room.host_user_id === userId) {
+    await db.from("rooms").update({ host_user_id: seats[0].user_id }).eq("id", roomId);
   }
-  await syncCardCounts(db, roomId);
-
-  await logMove(db, roomId, playerId, "attack", { from, to, roll: outcome.roll, captured: outcome.captured, defenderEliminated: outcome.defenderEliminated });
-  return json({ ok: true, roll: outcome.roll, captured: outcome.captured, defenderEliminated: outcome.defenderEliminated, winnerId: outcome.state.winnerId });
+  return json({ ok: true });
 }
 
-async function moveIn(db: Db, userId: string, body: any) {
-  const roomId = String(body.roomId);
-  const count = Number(body.count);
-  const { room, players, territoryRows } = await loadRoom(db, roomId);
-  const playerId = findPlayerId(players, userId);
-  if (room.current_player_id !== playerId) throw new Error("Not your turn");
-  const pending = room.pending_capture;
-  if (!pending) throw new Error("No pending capture to move into");
-
-  const state = engine.moveInAfterCapture(buildGameState(room, players, territoryRows), pending.from, pending.to, pending.diceUsed, count);
-  await saveState(db, roomId, state);
-  const { error } = await db.from("rooms").update({ pending_capture: null }).eq("id", roomId);
+async function updateSeat(db: Db, userId: string, body: Body) {
+  const roomId = parseUuid(body.roomId, "roomId");
+  requireLobby(await loadRoom(db, roomId));
+  await requireSeat(db, roomId, userId);
+  const patch: Record<string, string> = {};
+  if (body.name !== undefined) patch.name = parseName(body.name);
+  if (body.color !== undefined) patch.color = parseColor(body.color);
+  const { error } = await db.from("room_players").update(patch).eq("room_id", roomId).eq("user_id", userId);
+  if (error?.code === "23505") throw new BadRequest("That color is taken, pick another");
   if (error) throw error;
   return json({ ok: true });
 }
 
-async function finishAttackingAction(db: Db, userId: string, body: any) {
-  const roomId = String(body.roomId);
-  const { room, players, territoryRows } = await loadRoom(db, roomId);
-  const playerId = findPlayerId(players, userId);
-  if (room.current_player_id !== playerId) throw new Error("Not your turn");
-  if (room.pending_capture) throw new Error("Resolve the pending move-in first");
-
-  const state = engine.finishAttacking(buildGameState(room, players, territoryRows));
-  await saveState(db, roomId, state);
-  return json({ ok: true });
-}
-
-async function fortify(db: Db, userId: string, body: any) {
-  const roomId = String(body.roomId);
-  const from = body.from as TerritoryId;
-  const to = body.to as TerritoryId;
-  const armies = Number(body.armies);
-  const { room, players, territoryRows } = await loadRoom(db, roomId);
-  const playerId = findPlayerId(players, userId);
-  if (room.current_player_id !== playerId) throw new Error("Not your turn");
-
-  const state0 = buildGameState(room, players, territoryRows);
-  const validationError = validateFortify(state0, playerId, { from, to, armies });
-  if (validationError) throw new Error(validationError);
-
-  const state = applyFortify(state0, { from, to, armies });
-  await saveState(db, roomId, state);
-  await logMove(db, roomId, playerId, "fortify", { from, to, armies });
-  return json({ ok: true });
-}
-
-async function endTurn(db: Db, userId: string, body: any) {
-  const roomId = String(body.roomId);
-  const { room, players, territoryRows } = await loadRoom(db, roomId);
-  const playerId = findPlayerId(players, userId);
-  if (room.current_player_id !== playerId) throw new Error("Not your turn");
-
-  const state0 = buildGameState(room, players, territoryRows);
-  let drewCard = false;
-  const drawCard = state0.conqueredThisTurn
-    ? () => {
-        drewCard = true;
-        return { type: "infantry", territory: null } as Card; // placeholder - the real card assignment happens against the `cards` table below
-      }
-    : undefined;
-
-  const state = engine.endTurn(state0, drawCard);
-  await saveState(db, roomId, state);
-
-  if (drewCard) {
-    const { data: topCard } = await db
-      .from("cards")
-      .select("id")
-      .eq("room_id", roomId)
-      .is("owner_player_id", null)
-      .order("deck_position", { ascending: true })
-      .limit(1)
-      .maybeSingle();
-    if (topCard) {
-      const { error } = await db.from("cards").update({ owner_player_id: playerId }).eq("id", topCard.id);
-      if (error) throw error;
-    }
-  }
-  await syncCardCounts(db, roomId);
-
-  await logMove(db, roomId, playerId, "end_turn", {});
-  return json({ ok: true });
-}
-
-async function tradeCards(db: Db, userId: string, body: any) {
-  const roomId = String(body.roomId);
-  const cardIds = body.cardIds as string[];
-  if (!Array.isArray(cardIds) || cardIds.length !== 3) throw new Error("Must trade exactly 3 cards");
-
-  const { room, players, territoryRows } = await loadRoom(db, roomId);
-  const playerId = findPlayerId(players, userId);
-  if (room.current_player_id !== playerId) throw new Error("Not your turn");
-  if (room.phase !== "reinforce") throw new Error("Cards can only be traded during your reinforce phase");
-
-  const { data: cardRows, error } = await db.from("cards").select("*").in("id", cardIds);
+async function updateSettings(db: Db, userId: string, body: Body) {
+  const roomId = parseUuid(body.roomId, "roomId");
+  const room = await loadRoom(db, roomId);
+  requireHost(room, userId);
+  requireLobby(room);
+  const { error } = await db.from("rooms").update({ settings: parseSettings(body.settings) }).eq("id", roomId).eq("status", "lobby");
   if (error) throw error;
-  if (!cardRows || cardRows.length !== 3 || cardRows.some((c) => c.owner_player_id !== playerId)) {
-    throw new Error("Those cards aren't all in your hand");
-  }
-  const cards = cardRows.map((c) => ({ type: c.card_type, territory: c.territory_id })) as [Card, Card, Card];
-  if (!isValidCardSet(cards)) throw new Error("Not a valid set (need 3 matching, or one of each type)");
-
-  const state = buildGameState(room, players, territoryRows);
-  const ownedTerritories = new Set(ALL_TERRITORY_IDS.filter((t) => state.territories[t].owner === playerId));
-  const setNumber = room.card_sets_traded + 1;
-  const bonus = cardSetBonusArmies(setNumber) + territoryBonusForSet(cards, ownedTerritories);
-
-  const { data: maxPosRow } = await db
-    .from("cards")
-    .select("deck_position")
-    .eq("room_id", roomId)
-    .order("deck_position", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  let nextPos = (maxPosRow?.deck_position ?? 0) + 1;
-  for (const id of cardIds) {
-    const { error: returnErr } = await db.from("cards").update({ owner_player_id: null, deck_position: nextPos }).eq("id", id);
-    if (returnErr) throw returnErr;
-    nextPos += 1;
-  }
-
-  const { error: rErr } = await db
-    .from("rooms")
-    .update({ reinforcements_remaining: room.reinforcements_remaining + bonus, card_sets_traded: setNumber })
-    .eq("id", roomId);
-  if (rErr) throw rErr;
-
-  await syncCardCounts(db, roomId);
-  await logMove(db, roomId, playerId, "trade_cards", { bonus });
-  return json({ ok: true, bonus });
+  return json({ ok: true });
 }
+
+async function kick(db: Db, userId: string, body: Body) {
+  const roomId = parseUuid(body.roomId, "roomId");
+  const target = parseUuid(body.userId, "userId");
+  const room = await loadRoom(db, roomId);
+  requireHost(room, userId);
+  requireLobby(room);
+  if (target === userId) throw new BadRequest("You can't remove yourself; leave instead");
+  await db.from("room_players").delete().eq("room_id", roomId).eq("user_id", target);
+  return json({ ok: true });
+}
+
+async function startGame(db: Db, userId: string, body: Body) {
+  const roomId = parseUuid(body.roomId, "roomId");
+  const room = await loadRoom(db, roomId);
+  requireHost(room, userId);
+  requireLobby(room);
+  const seats = await loadSeats(db, roomId);
+  if (seats.length < MIN_PLAYERS) throw new BadRequest(`You need at least ${MIN_PLAYERS} players`);
+  if (seats.length > MAX_PLAYERS) throw new BadRequest(`At most ${MAX_PLAYERS} players can play`);
+
+  const state = createGame({
+    players: seats.map((s) => ({ id: s.user_id, name: s.name, color: s.color })),
+    settings: parseSettings(room.settings),
+    rng: secureRandom,
+    now: Date.now(),
+  });
+  // The version check makes a double-click on Start harmless.
+  const { version } = await commit(db, roomId, room.version, state, []);
+  return json({ ok: true, version });
+}
+
+async function rematch(db: Db, userId: string, body: Body) {
+  const roomId = parseUuid(body.roomId, "roomId");
+  const room = await loadRoom(db, roomId);
+  requireHost(room, userId);
+  if (room.status !== "finished") throw new BadRequest("The game isn't over yet");
+  await Promise.all([
+    db.from("room_private").delete().eq("room_id", roomId),
+    db.from("player_hands").delete().eq("room_id", roomId),
+    db.from("game_events").delete().eq("room_id", roomId),
+  ]);
+  const { error } = await db
+    .from("rooms")
+    .update({ status: "lobby", public_state: null, version: room.version + 1 })
+    .eq("id", roomId)
+    .eq("version", room.version);
+  if (error) throw error;
+  return json({ ok: true });
+}
+
+// ---------- game moves ----------
+
+async function act(db: Db, userId: string, body: Body) {
+  const roomId = parseUuid(body.roomId, "roomId");
+  const action = parseAction(body.action);
+  await requireSeat(db, roomId, userId);
+  const { result, version, firstSeq } = await transact(db, roomId, (state) =>
+    applyAction(state, action, { actor: userId, rng: secureRandom, now: Date.now() }),
+  );
+  return json({
+    ok: true,
+    version,
+    state: toPublicState(result.state),
+    hand: result.state.hands[userId] ?? [],
+    events: result.events.map((event, i) => ({ seq: firstSeq + i, event })),
+  });
+}
+
+const HANDLERS: Record<string, (db: Db, userId: string, body: Body) => Promise<Response>> = {
+  "create-room": createRoom,
+  "join-room": joinRoom,
+  "leave-room": leaveRoom,
+  "update-seat": updateSeat,
+  "update-settings": updateSettings,
+  kick,
+  "start-game": startGame,
+  rematch,
+  act,
+};
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: CORS_HEADERS });
+  if (req.method !== "POST") return json({ ok: false, error: "Use POST" }, 405);
 
   try {
-    const body = await req.json();
-    const action = String(body.action ?? "");
+    const body = (await req.json()) as Body;
+    const handler = HANDLERS[String(body.op ?? "")];
+    if (!handler) return json({ ok: false, error: "Unknown operation" }, 400);
 
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+    const url = Deno.env.get("SUPABASE_URL")!;
     const anonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
-    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
-    const authHeader = req.headers.get("Authorization") ?? "";
-    const userClient = createClient(supabaseUrl, anonKey, { global: { headers: { Authorization: authHeader } } });
-    const {
-      data: { user },
-      error: userErr,
-    } = await userClient.auth.getUser();
-    if (userErr || !user) return json({ ok: false, error: "Not authenticated" }, 401);
+    const auth = createClient(url, anonKey, { global: { headers: { Authorization: req.headers.get("Authorization") ?? "" } } });
+    const { data, error } = await auth.auth.getUser();
+    if (error || !data.user) return json({ ok: false, error: "Please sign in again" }, 401);
 
-    const db = createClient(supabaseUrl, serviceRoleKey);
-
-    switch (action) {
-      case "create-room":
-        return await createRoom(db, user.id, body);
-      case "join-room":
-        return await joinRoom(db, user.id, body);
-      case "start-game":
-        return await startGame(db, user.id, body);
-      case "reinforce":
-        return await reinforce(db, user.id, body);
-      case "finish-reinforcing":
-        return await finishReinforcingAction(db, user.id, body);
-      case "attack":
-        return await attack(db, user.id, body);
-      case "move-in":
-        return await moveIn(db, user.id, body);
-      case "finish-attacking":
-        return await finishAttackingAction(db, user.id, body);
-      case "fortify":
-        return await fortify(db, user.id, body);
-      case "end-turn":
-        return await endTurn(db, user.id, body);
-      case "trade-cards":
-        return await tradeCards(db, user.id, body);
-      default:
-        return json({ ok: false, error: `Unknown action "${action}"` }, 400);
-    }
+    const db = createClient(url, serviceKey, { auth: { persistSession: false } });
+    return await handler(db, data.user.id, body);
   } catch (e) {
-    return json({ ok: false, error: e instanceof Error ? e.message : String(e) }, 400);
+    if (e instanceof RuleError || e instanceof BadRequest) return json({ ok: false, error: e.message }, 400);
+    console.error(e);
+    const message = e instanceof Error && e.message === "That game no longer exists" ? e.message : "Something went wrong on the server";
+    return json({ ok: false, error: message }, 500);
   }
 });

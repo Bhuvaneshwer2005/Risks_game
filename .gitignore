@@ -39,3 +39,4 @@ scripts/preview.html
 scripts/map-tools/mask_*.npy
 scripts/map-tools/masks_preview.png
 scripts/map-tools/__pycache__/
+scripts/board/preview.html
