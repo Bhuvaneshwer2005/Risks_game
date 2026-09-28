@@ -129,7 +129,9 @@ export function BoardMap(props: BoardMapProps) {
           <g pointerEvents="none">
             {ALL_TERRITORY_IDS.map((id) => {
               const t = territories[id];
-              const owner = t.owner ? playerById.get(t.owner) : undefined;
+              // Unclaimed territories (claim setup) show no badge.
+              if (!t.owner) return null;
+              const owner = playerById.get(t.owner);
               return (
                 <ArmyBadge
                   key={id}
@@ -172,7 +174,7 @@ export function BoardMap(props: BoardMapProps) {
           {hovered && (
             <div className={styles.tooltipOwner}>
               <span className={styles.dot} style={{ background: hoverOwner?.color ?? "#6b7280" }} />
-              {hoverOwner?.name ?? "Unclaimed"} · {hovered.armies} {hovered.armies === 1 ? "army" : "armies"}
+              {hovered.owner ? `${hoverOwner?.name ?? "Someone"} · ${hovered.armies} ${hovered.armies === 1 ? "army" : "armies"}` : "Unclaimed"}
             </div>
           )}
         </div>

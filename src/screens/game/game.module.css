@@ -160,6 +160,76 @@
   gap: 6px;
 }
 
+.mobileOnly {
+  display: none;
+}
+
+.phaseLabel {
+  font-family: var(--font-display);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--gold-bright);
+  margin-right: 4px;
+}
+
+.claimLeft {
+  padding: 3px 10px;
+  border-radius: 99px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+  background: rgba(5, 10, 20, 0.55);
+  border: 1px solid var(--hairline);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.timerWrap {
+  position: relative;
+  display: inline-flex;
+}
+
+/* "+15s" floats up from the timer when a move buys more time. */
+.timeBonus {
+  position: absolute;
+  left: 50%;
+  top: 100%;
+  margin-top: 4px;
+  padding: 2px 8px;
+  border-radius: 99px;
+  font-size: 12px;
+  font-weight: 800;
+  color: #0c1a10;
+  background: var(--success);
+  box-shadow: 0 4px 14px rgba(63, 191, 127, 0.45);
+  white-space: nowrap;
+  pointer-events: none;
+  animation: timeBonus 1.8s var(--ease-out) forwards;
+}
+
+@keyframes timeBonus {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, 6px) scale(0.7);
+  }
+  15% {
+    opacity: 1;
+    transform: translate(-50%, 0) scale(1.08);
+  }
+  25% {
+    transform: translate(-50%, 0) scale(1);
+  }
+  75% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -4px);
+  }
+}
+
 /* ---------- players rail ---------- */
 
 .players {
@@ -219,7 +289,9 @@
 
 .playerStats {
   display: flex;
-  gap: 10px;
+  flex-wrap: wrap;
+  column-gap: 10px;
+  white-space: nowrap;
   font-size: 11.5px;
   color: var(--text-dim);
   font-variant-numeric: tabular-nums;
@@ -241,11 +313,37 @@
   color: var(--text);
 }
 
-.ready {
-  font-size: 10.5px;
-  color: var(--text-dim);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+/* Remove a player: shows on hover (always on touch screens). */
+.kick {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-faint);
+  opacity: 0;
+  transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.player:hover .kick,
+.kick:focus-visible {
+  opacity: 1;
+}
+
+.kick:hover {
+  color: #ffb3b5;
+  background: rgba(239, 91, 95, 0.16);
+}
+
+@media (hover: none) {
+  .kick {
+    opacity: 0.7;
+  }
 }
 
 /* ---------- side panel ---------- */
@@ -323,25 +421,6 @@
 .handGrid > * {
   width: 78px;
   height: 108px;
-}
-
-.log {
-  list-style: none;
-  margin: 0;
-  padding: 8px 14px 14px;
-  overflow: auto;
-  font-size: 12.5px;
-  line-height: 1.45;
-  color: var(--text-dim);
-}
-
-.log li {
-  padding: 6px 0;
-  border-bottom: 1px solid var(--hairline);
-}
-
-.log li:first-child {
-  color: var(--text);
 }
 
 /* ---------- action dock ---------- */
@@ -603,75 +682,6 @@
   flex-wrap: wrap;
 }
 
-/* ---------- victory ---------- */
-
-.victory {
-  position: absolute;
-  inset: 0;
-  z-index: 40;
-  display: grid;
-  place-items: center;
-  padding: 16px;
-  background: radial-gradient(circle at 50% 40%, rgba(212, 168, 75, 0.18), rgba(3, 6, 12, 0.85) 60%);
-  animation: fadeIn 0.6s ease;
-}
-
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-  }
-}
-
-.victoryCard {
-  width: min(460px, 100%);
-  padding: 32px 28px;
-  border-radius: 22px;
-  text-align: center;
-  background: linear-gradient(180deg, rgba(24, 36, 62, 0.97), rgba(11, 18, 33, 0.97));
-  border: 1px solid rgba(242, 207, 120, 0.4);
-  box-shadow:
-    var(--shadow-pop),
-    0 0 80px rgba(212, 168, 75, 0.2);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 14px;
-  animation: dockIn 0.5s var(--ease-spring);
-}
-
-.victoryCrown {
-  font-size: 54px;
-  line-height: 1;
-  text-shadow: 0 0 30px currentColor;
-}
-
-.victoryTitle {
-  font-family: var(--font-display);
-  font-size: 26px;
-  letter-spacing: 0.04em;
-}
-
-.standings {
-  list-style: none;
-  margin: 4px 0 8px;
-  padding: 0;
-  width: 100%;
-}
-
-.standings li {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 4px;
-  border-bottom: 1px solid var(--hairline);
-}
-
-.standings li span {
-  margin-left: auto;
-  color: var(--text-dim);
-  font-size: 12.5px;
-}
-
 /* ---------- small screens ---------- */
 
 @media (max-width: 1100px) {
@@ -728,6 +738,21 @@
     overflow-x: auto;
     padding: 6px;
     display: none;
+  }
+
+  .mobileOnly {
+    display: contents;
+  }
+
+  .players.playersOpen {
+    display: flex;
+    top: 112px;
+    bottom: auto;
+    flex-direction: column;
+    max-height: calc(100% - 330px);
+    overflow: auto;
+    z-index: 11;
+    animation: dockIn 0.25s var(--ease-out);
   }
 
   .dockWrap {

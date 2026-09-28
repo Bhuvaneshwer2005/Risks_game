@@ -5,7 +5,7 @@ import { applyAction, createGame, type NewPlayer } from "../game/engine.ts";
 import { nextSetupPlayer } from "../game/selectors.ts";
 import { toPublicState } from "../game/state.ts";
 import type { GameAction, GameSettings, GameState, PlayerId } from "../game/types.ts";
-import { ConnectionBase, type FeedEvent, type GameConnection } from "./connection.ts";
+import { ConnectionBase, FEED_LIMIT, type FeedEvent, type GameConnection } from "./connection.ts";
 import { cryptoRng } from "./random.ts";
 
 const STORAGE_KEY = "risk.localGame.v2";
@@ -74,6 +74,16 @@ export class LocalConnection extends ConnectionBase implements GameConnection {
     this.save();
   }
 
+  // Around one device, whoever is holding it can remove a player who left the table.
+  async kickPlayer(playerId: PlayerId): Promise<void> {
+    const actor = this.state.players.find((p) => !p.neutral && p.status === "active" && p.id !== playerId)?.id;
+    if (!actor) throw new Error("There's nobody left to remove them");
+    const { state, events } = applyAction(this.state, { type: "kick", player: playerId }, { actor, rng: cryptoRng, now: Date.now() });
+    this.state = state;
+    this.publish(this.appendFeed(events));
+    this.save();
+  }
+
   async leave(): Promise<void> {
     try {
       localStorage.removeItem(STORAGE_KEY);
@@ -97,7 +107,7 @@ export class LocalConnection extends ConnectionBase implements GameConnection {
   private save(): void {
     try {
       if (this.state.status === "finished") localStorage.removeItem(STORAGE_KEY);
-      else localStorage.setItem(STORAGE_KEY, JSON.stringify({ state: this.state, feed: this.snapshot.feed.slice(-30) }));
+      else localStorage.setItem(STORAGE_KEY, JSON.stringify({ state: this.state, feed: this.snapshot.feed.slice(-FEED_LIMIT) }));
     } catch {
       // Private mode or full storage: the game still works, it just won't survive a reload.
     }

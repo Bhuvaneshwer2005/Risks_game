@@ -45,5 +45,6 @@ export function playerSummaries(state: CoreState): Record<PlayerId, PlayerSummar
 /** In a local hot-seat game, whose setup placement is next. */
 export function nextSetupPlayer(state: CoreState): PlayerId | null {
   if (state.status !== "setup") return null;
+  if (state.phase === "claim") return state.currentPlayer;
   return state.turnOrder.find((id) => (state.setupPools[id] ?? 0) > 0) ?? null;
 }

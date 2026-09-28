@@ -24,6 +24,10 @@ function checkInvariants(s: GameState): void {
   const ids = new Set(s.players.map((p) => p.id));
   for (const t of ALL_TERRITORY_IDS) {
     const terr = s.territories[t];
+    if (s.phase === "claim" && terr.owner === null) {
+      if (terr.armies !== 0) throw new Error(`unclaimed ${t} has ${terr.armies} armies`);
+      continue;
+    }
     if (!terr.owner || !ids.has(terr.owner)) throw new Error(`${t} has a bad owner ${terr.owner}`);
     if (!Number.isInteger(terr.armies) || terr.armies < 1) throw new Error(`${t} has ${terr.armies} armies`);
   }
@@ -48,6 +52,12 @@ function checkInvariants(s: GameState): void {
 
 // A plausible move for whoever should act next.
 function botMove(s: GameState, rng: Rng): { actor: PlayerId; action: GameAction } {
+  if (s.status === "setup" && s.phase === "claim") {
+    const actor = s.currentPlayer!;
+    if (rng() < 0.01) return { actor, action: { type: "resign" } };
+    const empty = ALL_TERRITORY_IDS.filter((t) => s.territories[t].owner === null);
+    return { actor, action: { type: "claim", territory: pick(rng, empty) } };
+  }
   if (s.status === "setup") {
     const actor = nextSetupPlayer(s)!;
     if (rng() < 0.5) return { actor, action: { type: "autoSetup" } };
@@ -67,6 +77,10 @@ function botMove(s: GameState, rng: Rng): { actor: PlayerId; action: GameAction 
   const owned = new Set<string>(mine);
 
   if (rng() < 0.001) return { actor, action: { type: "resign" } };
+  if (rng() < 0.001) {
+    const others = activePlayers(s).filter((p) => p.id !== actor);
+    if (others.length) return { actor, action: { type: "kick", player: pick(rng, others).id } };
+  }
 
   const mustTrade = s.eliminationTrade || (s.phase === "reinforce" && hand.length >= 5);
   if (mustTrade || (s.phase === "reinforce" && hand.length >= 3 && rng() < 0.3)) {
@@ -159,6 +173,7 @@ describe("fuzz: random full games", () => {
       const rng = mulberry32(1000 + game);
       const playerCount = 2 + (game % 5);
       const settings = {
+        setupMode: game % 2 === 0 ? ("claim" as const) : ("deal" as const),
         fortifyRule: game % 2 === 0 ? ("adjacent" as const) : ("connected" as const),
         cardMode: game % 3 === 0 ? ("fixed" as const) : ("progressive" as const),
         turnSeconds: game % 4 === 0 ? 60 : null,

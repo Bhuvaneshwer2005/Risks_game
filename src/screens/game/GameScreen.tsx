@@ -1,21 +1,25 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { ADJACENCY, CONTINENTS, type TerritoryId } from "../../game/mapData.ts";
+import { ADJACENCY, ALL_TERRITORY_IDS, CONTINENTS, type TerritoryId } from "../../game/mapData.ts";
 import { allValidSets } from "../../game/cards.ts";
+import { MAX_TIMEOUT_STRIKES, SETUP_TIME_MULTIPLIER } from "../../game/engine.ts";
 import { attackTargets, canAttackFrom, fortifyTargets, playerSummaries, territoriesOf } from "../../game/selectors.ts";
-import type { GameAction, GameEvent, Placements, PlayerId, PublicState } from "../../game/types.ts";
+import { CLAIM_SECONDS, type GameAction, type GameEvent, type Placements, type PlayerId, type PlayerState, type PublicState } from "../../game/types.ts";
 import { BoardMap, type BoardArrow, type BoardMapProps } from "../../board/BoardMap.tsx";
 import { webglAvailable } from "../../board/webgl.ts";
 import type { GameConnection } from "../../net/connection.ts";
 import { sfx } from "../../audio/sfx.ts";
 import { setPrefs, usePrefs } from "../../state/prefs.ts";
-import { Button, CardFace, Dot, IconButton, Modal, TimerRing } from "../../ui/index.tsx";
+import { Button, CardFace, Dot, Icon, IconButton, Modal, TimerRing } from "../../ui/index.tsx";
 import { useToast } from "../../ui/toast.ts";
 import { RulesModal } from "../RulesModal.tsx";
 import { ActionDock, type DockMode } from "./ActionDock.tsx";
 import { DiceTray } from "./DiceTray.tsx";
+import { GameLog } from "./GameLog.tsx";
 import { TradeModal } from "./TradeModal.tsx";
-import { describeEvent, playerName } from "./describe.ts";
+import { StatsView, VictoryScreen } from "./Victory.tsx";
+import { playerName } from "./describe.ts";
 import styles from "./game.module.css";
+import victoryStyles from "./victory.module.css";
 
 type Battle = Extract<GameEvent, { type: "battle" }>;
 
@@ -62,8 +66,13 @@ function GameView({ connection, game, onExit }: { connection: GameConnection; ga
   const [tradeOpen, setTradeOpen] = useState(false);
   const [rulesOpen, setRulesOpen] = useState(false);
   const [leaveOpen, setLeaveOpen] = useState(false);
+  const [kickTarget, setKickTarget] = useState<PlayerState | null>(null);
+  const [resultsHidden, setResultsHidden] = useState(false);
+  const [statsOpen, setStatsOpen] = useState(false);
   const [panel, setPanel] = useState<"cards" | "log">("cards");
   const [panelOpen, setPanelOpen] = useState(() => window.innerWidth >= 1500);
+  // Phones hide the player list until asked for.
+  const [playersOpen, setPlayersOpen] = useState(false);
   const [dismissedCapture, setDismissedCapture] = useState<string | null>(null);
   const [battle, setBattle] = useState<{ battle: Battle; key: number } | null>(null);
   const [arrow, setArrow] = useState<BoardArrow | null>(null);
@@ -72,17 +81,25 @@ function GameView({ connection, game, onExit }: { connection: GameConnection; ga
 
   const meState = game.players.find((p) => p.id === me) ?? null;
   const isMyTurn = game.status === "playing" && !!me && game.currentPlayer === me;
+  const claiming = game.status === "setup" && game.phase === "claim";
+  const isMyPick = claiming && !!me && game.currentPlayer === me;
   const current = game.players.find((p) => p.id === game.currentPlayer) ?? null;
+  const unclaimed = useMemo(() => ALL_TERRITORY_IDS.filter((t) => game.territories[t].owner === null), [game.territories]);
 
   // ---------- what the player can do right now ----------
   const mode: DockMode = useMemo(() => {
     if (game.status === "finished") return { kind: "over" };
     if (game.status === "setup") {
+      if (game.phase === "claim") {
+        if (current && current.id === me && meState?.status === "active") return { kind: "claim", left: unclaimed.length };
+        return current ? { kind: "claim-wait", player: current, left: unclaimed.length } : { kind: "over" };
+      }
       const pool = me ? (game.setupPools[me] ?? 0) : 0;
       if (meState?.status === "active" && pool > 0) return { kind: "setup-place", pool };
       const humans = game.players.filter((p) => !p.neutral && p.status === "active");
       return { kind: "setup-wait", ready: humans.filter((p) => (game.setupPools[p.id] ?? 0) === 0).length, total: humans.length };
     }
+    if (connectionMode === "online" && meState && meState.status !== "active") return { kind: "out", status: meState.status };
     if (!isMyTurn) return current ? { kind: "wait", player: current } : { kind: "over" };
     if (game.eliminationTrade) {
       return { kind: "trade", forced: true, reason: "You took a defeated player's cards: trade down to 4 or fewer before you continue." };
@@ -93,7 +110,7 @@ function GameView({ connection, game, onExit }: { connection: GameConnection; ga
     if (game.reinforcements > 0) return { kind: "place", pool: game.reinforcements };
     if (game.phase === "attack") return { kind: "attack" };
     return { kind: "fortify" };
-  }, [game, me, meState, isMyTurn, current, hand.length]);
+  }, [game, me, meState, isMyTurn, current, hand.length, unclaimed.length, connectionMode]);
 
   const placing = mode.kind === "place" || mode.kind === "setup-place";
   const pool = placing ? mode.pool : 0;
@@ -118,6 +135,7 @@ function GameView({ connection, game, onExit }: { connection: GameConnection; ga
 
   const focusable = useMemo(() => {
     if (!me) return null;
+    if (mode.kind === "claim") return new Set(unclaimed);
     if (placing) return new Set(territoriesOf(game, me));
     if (mode.kind === "attack" && !from) return new Set(territoriesOf(game, me).filter((t) => canAttackFrom(game, me, t)));
     if (mode.kind === "attack" && from) return new Set([from, ...targets]);
@@ -126,7 +144,7 @@ function GameView({ connection, game, onExit }: { connection: GameConnection; ga
     }
     if (mode.kind === "fortify" && from) return new Set([from, ...targets]);
     return null;
-  }, [me, placing, mode.kind, from, targets, game, rule]);
+  }, [me, placing, mode.kind, from, targets, game, rule, unclaimed]);
 
   const pendingKey = game.pendingCapture ? `${game.turnNumber}-${game.pendingCapture.from}-${game.pendingCapture.to}` : null;
   const captureDismissed = pendingKey !== null && pendingKey === dismissedCapture;
@@ -153,8 +171,23 @@ function GameView({ connection, game, onExit }: { connection: GameConnection; ga
 
   const setDraft = (placements: Placements) => setDraftState({ key: draftKey, placements });
 
+  const claim = (id: TerritoryId) => {
+    if (busy || game.territories[id].owner !== null) return;
+    sfx.place();
+    void run({ type: "claim", territory: id });
+  };
+
+  // Random, but next to territories already held when possible.
+  const pickForMe = () => {
+    if (!me) return;
+    const near = unclaimed.filter((t) => ADJACENCY[t].some((n) => game.territories[n].owner === me));
+    const choices = near.length ? near : unclaimed;
+    if (choices.length) claim(choices[Math.floor(Math.random() * choices.length)]);
+  };
+
   const onTerritoryClick = (id: TerritoryId, mods: { shift: boolean }) => {
     if (!me) return;
+    if (mode.kind === "claim") return claim(id);
     const mine = game.territories[id].owner === me;
     if (placing) {
       if (!mine) return;
@@ -220,6 +253,16 @@ function GameView({ connection, game, onExit }: { connection: GameConnection; ga
     }
   };
 
+  const kick = async (p: PlayerState) => {
+    setKickTarget(null);
+    try {
+      await connection.kickPlayer(p.id);
+    } catch (e) {
+      sfx.error();
+      toast((e as Error).message, "error");
+    }
+  };
+
   // ---------- live events → animations ----------
   const gameRef = useRef(game);
   const meRef = useRef(me);
@@ -240,6 +283,15 @@ function GameView({ connection, game, onExit }: { connection: GameConnection; ga
       const g = connection.getSnapshot().game ?? gameRef.current;
       for (const { seq, event } of fresh) {
         switch (event.type) {
+          case "claimed":
+            if (event.player !== meRef.current || m === "local") sfx.click();
+            setFlash({ id: event.territory, key: seq });
+            break;
+          case "claimsComplete":
+            sfx.turn();
+            setBanner({ text: "Deploy your armies", color: "#f2cf78", key: seq });
+            later(() => setBanner((b) => (b?.key === seq ? null : b)), 1700);
+            break;
           case "battle":
             sfx.dice();
             setBattle({ battle: event, key: seq });
@@ -276,6 +328,10 @@ function GameView({ connection, game, onExit }: { connection: GameConnection; ga
           case "resigned":
             toast(`${playerName(g, event.player)} left the war`);
             break;
+          case "kicked":
+            if (event.player === meRef.current && m === "online") toast("The host removed you from the game", "error");
+            else toast(`${playerName(g, event.player)} was removed from the game`);
+            break;
           case "gameOver":
             sfx.victory();
             break;
@@ -290,26 +346,40 @@ function GameView({ connection, game, onExit }: { connection: GameConnection; ga
     };
   }, [connection, toast]);
 
-  // Tab title nudges an online player whose turn it is.
+  // Tab title nudges an online player whose turn (or pick) it is.
+  const myMove = isMyTurn || isMyPick;
   useEffect(() => {
-    document.title = isMyTurn && connectionMode === "online" ? "● Your turn · Risk" : "Risk · Global Domination";
+    document.title = myMove && connectionMode === "online" ? `● Your ${isMyPick ? "pick" : "turn"} · Risk` : "Risk · Global Domination";
     return () => {
       document.title = "Risk · Global Domination";
     };
-  }, [isMyTurn, connectionMode]);
+  }, [myMove, isMyPick, connectionMode]);
 
   // Turn timer: when it runs out, claim the timeout (locally, or online if it's our turn to watch the clock).
   const deadline = game.turnDeadline !== null ? game.turnDeadline - clockOffset : null;
   useEffect(() => {
     if (deadline === null || game.status === "finished") return;
-    const watcher = connectionMode === "local" || shouldClaimTimeout(game, me);
-    if (!watcher) return;
-    const wait = Math.max(0, deadline - Date.now()) + (connectionMode === "local" ? 0 : 1500);
+    const extra = connectionMode === "local" ? 0 : timeoutWatchDelay(game, me);
+    if (extra === null) return;
+    const wait = Math.max(0, deadline - Date.now()) + extra;
     const id = window.setTimeout(() => {
       void connection.act({ type: "claimTimeout" }).catch(() => {});
     }, wait);
     return () => window.clearTimeout(id);
   }, [deadline, game, me, connection, connectionMode]);
+
+  // "+15s" pops up by the timer when a move buys more time on the same turn.
+  const [clock, setClock] = useState({ turn: game.turnNumber, player: game.currentPlayer, deadline: game.turnDeadline, bonus: null as { seconds: number; key: number } | null });
+  if (clock.deadline !== game.turnDeadline || clock.turn !== game.turnNumber || clock.player !== game.currentPlayer) {
+    const sameTurn = clock.turn === game.turnNumber && clock.player === game.currentPlayer && game.status === "playing";
+    const gained = sameTurn && clock.deadline !== null && game.turnDeadline !== null ? game.turnDeadline - clock.deadline : 0;
+    setClock({
+      turn: game.turnNumber,
+      player: game.currentPlayer,
+      deadline: game.turnDeadline,
+      bonus: gained >= 1000 ? { seconds: Math.round(gained / 1000), key: game.turnDeadline ?? 0 } : sameTurn ? clock.bonus : null,
+    });
+  }
 
   // Esc clears the selection.
   useEffect(() => {
@@ -327,12 +397,35 @@ function GameView({ connection, game, onExit }: { connection: GameConnection; ga
   );
   const winner = game.winner ? game.players.find((p) => p.id === game.winner) : null;
   const ownedSet = useMemo(() => new Set(me ? territoriesOf(game, me) : []), [game, me]);
+  const isHost = connectionMode === "local" || (!!me && snap.lobby?.hostId === me);
+  const canKick = (p: PlayerState) =>
+    game.status !== "finished" && isHost && !p.neutral && p.status === "active" && (connectionMode === "local" || p.id !== me);
+
+  const timerTotal = !game.settings.turnSeconds
+    ? 0
+    : claiming
+      ? CLAIM_SECONDS * 1000
+      : game.settings.turnSeconds * (game.status === "setup" ? SETUP_TIME_MULTIPLIER : 1) * 1000;
 
   const leaveGame = async () => {
     setLeaveOpen(false);
     if (connectionMode === "online" && game.status !== "finished" && meState?.status === "active") await run({ type: "resign" });
     await connection.leave();
     onExit();
+  };
+
+  const statusTag = (p: PlayerState) => {
+    if (p.neutral) return "neutral";
+    if (p.status === "eliminated") return "out";
+    if (p.status === "kicked") return "removed";
+    if (p.status === "resigned") return p.timeoutStrikes >= MAX_TIMEOUT_STRIKES ? "timed out" : "left";
+    return null;
+  };
+
+  const setupTag = (p: PlayerState) => {
+    if (game.status !== "setup" || p.neutral || p.status !== "active") return null;
+    if (claiming) return p.id === game.currentPlayer ? "picking" : null;
+    return (game.setupPools[p.id] ?? 0) === 0 ? "ready" : "placing";
   };
 
   return (
@@ -361,7 +454,20 @@ function GameView({ connection, game, onExit }: { connection: GameConnection; ga
           <span className={styles.roomTag}>{connectionMode === "local" ? "Pass & play" : snap.lobby ? `Room ${snap.lobby.code}` : "Online"}</span>
         </div>
         <div className={styles.turn}>
-          {game.status === "setup" ? (
+          {claiming ? (
+            <>
+              <span className={styles.turnText}>
+                <span className={styles.phaseLabel}>Claiming</span>
+                {current && (
+                  <>
+                    <Dot color={current.color} /> {current.name}
+                    {current.id === me && connectionMode === "online" && <em className={styles.you}>you</em>}
+                  </>
+                )}
+              </span>
+              <span className={styles.claimLeft}>{unclaimed.length} left</span>
+            </>
+          ) : game.status === "setup" ? (
             <span className={styles.turnText}>Deployment</span>
           ) : winner ? (
             <span className={styles.turnText}>
@@ -382,8 +488,15 @@ function GameView({ connection, game, onExit }: { connection: GameConnection; ga
               </ol>
             </>
           ) : null}
-          {deadline !== null && game.settings.turnSeconds && (
-            <TimerRing key={deadline} deadline={deadline} total={game.settings.turnSeconds * (game.status === "setup" ? 2000 : 1000)} />
+          {deadline !== null && timerTotal > 0 && game.status !== "finished" && (
+            <span className={styles.timerWrap}>
+              <TimerRing key={deadline} deadline={deadline} total={timerTotal} />
+              {clock.bonus && (
+                <span key={clock.bonus.key} className={styles.timeBonus} aria-live="polite">
+                  +{clock.bonus.seconds}s
+                </span>
+              )}
+            </span>
           )}
         </div>
         <div className={styles.topActions}>
@@ -394,6 +507,9 @@ function GameView({ connection, game, onExit }: { connection: GameConnection; ga
               onClick={() => setPrefs({ board3d: !prefs.board3d })}
             />
           )}
+          <span className={styles.mobileOnly}>
+            <IconButton icon={playersOpen ? "close" : "users"} label={playersOpen ? "Hide players" : "Show players"} onClick={() => setPlayersOpen((o) => !o)} />
+          </span>
           <IconButton icon="book" label="Rules" onClick={() => setRulesOpen(true)} />
           <IconButton icon={prefs.muted ? "soundOff" : "soundOn"} label={prefs.muted ? "Unmute" : "Mute"} onClick={() => setPrefs({ muted: !prefs.muted })} />
           <IconButton icon={panelOpen ? "close" : "cards"} label={panelOpen ? "Hide cards and log" : "Show cards and log"} onClick={() => setPanelOpen((o) => !o)} />
@@ -402,11 +518,13 @@ function GameView({ connection, game, onExit }: { connection: GameConnection; ga
       </header>
 
       {/* ---------- players ---------- */}
-      <aside className={`${styles.players} ${styles.glass}`} aria-label="Players">
+      <aside className={`${styles.players} ${styles.glass} ${playersOpen ? styles.playersOpen : ""}`} aria-label="Players">
         {game.players.map((p) => {
           const s = summaries[p.id];
           const isCurrent = p.id === game.currentPlayer;
           const out = p.status !== "active";
+          const tag = statusTag(p);
+          const setup = setupTag(p);
           return (
             <div key={p.id} className={`${styles.player} ${isCurrent ? styles.playerCurrent : ""} ${out ? styles.playerOut : ""}`}>
               <span className={styles.playerBar} style={{ background: p.color }} />
@@ -414,9 +532,8 @@ function GameView({ connection, game, onExit }: { connection: GameConnection; ga
                 <div className={styles.playerName}>
                   {p.name}
                   {p.id === me && connectionMode === "online" && <em className={styles.you}>you</em>}
-                  {p.neutral && <em className={styles.tag}>neutral</em>}
-                  {p.status === "eliminated" && <em className={styles.tag}>out</em>}
-                  {p.status === "resigned" && <em className={styles.tag}>left</em>}
+                  {tag && <em className={styles.tag}>{tag}</em>}
+                  {setup && <em className={setup === "picking" ? styles.you : styles.tag}>{setup}</em>}
                 </div>
                 <div className={styles.playerStats}>
                   <span title="Territories">{s.territories} terr.</span>
@@ -433,8 +550,10 @@ function GameView({ connection, game, onExit }: { connection: GameConnection; ga
                   </div>
                 )}
               </div>
-              {game.status === "setup" && !p.neutral && p.status === "active" && (
-                <span className={styles.ready}>{(game.setupPools[p.id] ?? 0) === 0 ? "ready" : "placing"}</span>
+              {canKick(p) && (
+                <button type="button" className={styles.kick} aria-label={`Remove ${p.name}`} title={`Remove ${p.name}`} onClick={() => setKickTarget(p)}>
+                  <Icon name="close" size={14} />
+                </button>
               )}
             </div>
           );
@@ -449,7 +568,7 @@ function GameView({ connection, game, onExit }: { connection: GameConnection; ga
               Cards <span className={styles.count}>{hand.length}</span>
             </button>
             <button role="tab" aria-selected={panel === "log"} className={panel === "log" ? styles.tabActive : undefined} onClick={() => setPanel("log")}>
-              Battle log
+              Game log
             </button>
           </div>
           {panel === "cards" ? (
@@ -475,15 +594,7 @@ function GameView({ connection, game, onExit }: { connection: GameConnection; ga
               )}
             </div>
           ) : (
-            <ol className={styles.log}>
-              {[...snap.feed]
-                .reverse()
-                .map((f) => ({ seq: f.seq, text: describeEvent(f.event, game) }))
-                .filter((l) => l.text)
-                .map((l) => (
-                  <li key={l.seq}>{l.text}</li>
-                ))}
-            </ol>
+            <GameLog feed={snap.feed} game={game} showKicker={connectionMode === "online"} />
           )}
         </aside>
       )}
@@ -503,6 +614,7 @@ function GameView({ connection, game, onExit }: { connection: GameConnection; ga
             from={from}
             to={to}
             captureDismissed={captureDismissed}
+            onPickForMe={pickForMe}
             onConfirmPlacement={confirmPlacement}
             onAutoPlace={autoPlace}
             onClearDraft={() => setDraft({})}
@@ -551,6 +663,28 @@ function GameView({ connection, game, onExit }: { connection: GameConnection; ga
 
       {rulesOpen && <RulesModal onClose={() => setRulesOpen(false)} />}
 
+      {kickTarget && (
+        <Modal
+          title={`Remove ${kickTarget.name}?`}
+          subtitle={
+            <>
+              They're out of the game for good. Their armies stay on the board as neutral defenders, and their cards are discarded.
+              {kickTarget.id === game.currentPlayer && game.status === "playing" && " Their turn ends right away."}
+            </>
+          }
+          onClose={() => setKickTarget(null)}
+        >
+          <div className={styles.modalActions}>
+            <Button variant="ghost" onClick={() => setKickTarget(null)}>
+              Cancel
+            </Button>
+            <Button variant="danger" icon="close" onClick={() => void kick(kickTarget)}>
+              Remove {kickTarget.name}
+            </Button>
+          </div>
+        </Modal>
+      )}
+
       {leaveOpen && (
         <Modal
           title={connectionMode === "local" ? "Leave this game?" : "Leave and resign?"}
@@ -577,51 +711,47 @@ function GameView({ connection, game, onExit }: { connection: GameConnection; ga
         </Modal>
       )}
 
-      {winner !== undefined && game.status === "finished" && (
-        <div className={styles.victory}>
-          <div className={styles.victoryCard}>
-            <div className={styles.victoryCrown} style={{ color: winner?.color }}>
-              ♛
-            </div>
-            <h2 className={styles.victoryTitle}>{winner ? `${winner.name} rules the world` : "The war is over"}</h2>
-            <p className={styles.muted}>
-              After {game.turnNumber} turns{winner ? `, holding ${summaries[winner.id].territories} territories with ${summaries[winner.id].armies} armies` : ""}.
-            </p>
-            <ol className={styles.standings}>
-              {[...game.players]
-                .filter((p) => !p.neutral)
-                .sort((a, b) => summaries[b.id].territories - summaries[a.id].territories)
-                .map((p) => (
-                  <li key={p.id}>
-                    <Dot color={p.color} /> {p.name}
-                    <span>{p.id === game.winner ? "Victor" : p.status === "resigned" ? "Left" : "Defeated"}</span>
-                  </li>
-                ))}
-            </ol>
-            <div className={styles.modalActions}>
-              {connection.rematch && snap.lobby?.hostId === me && (
-                <Button variant="secondary" size="lg" icon="undo" onClick={() => void connection.rematch?.().catch((e: Error) => toast(e.message, "error"))}>
-                  Rematch
-                </Button>
-              )}
-              <Button variant="primary" size="lg" onClick={() => void connection.leave().then(onExit)}>
-                Back to home
-              </Button>
-            </div>
+      {game.status === "finished" &&
+        (resultsHidden ? (
+          <div className={victoryStyles.pill}>
+            {winner && <Dot color={winner.color} />}
+            {winner ? `${winner.name} won` : "Game over"}
+            <Button size="sm" variant="primary" icon="crown" onClick={() => setResultsHidden(false)}>
+              Results
+            </Button>
           </div>
-        </div>
-      )}
+        ) : (
+          <VictoryScreen
+            game={game}
+            showKicker={connectionMode === "online"}
+            onShowStats={() => setStatsOpen(true)}
+            onViewBoard={() => setResultsHidden(true)}
+            onHome={() => void connection.leave().then(onExit)}
+            onRematch={
+              connection.rematch && snap.lobby?.hostId === me
+                ? () => void connection.rematch?.().catch((e: Error) => toast(e.message, "error"))
+                : undefined
+            }
+          />
+        ))}
+
+      {statsOpen && game.status === "finished" && <StatsView game={game} onClose={() => setStatsOpen(false)} />}
     </div>
   );
 }
 
-// Online, the player seated right after the idle one claims the timeout (and
-// everyone else only as a fallback, a few seconds later, via the server's
-// rejection of duplicates).
-function shouldClaimTimeout(game: PublicState, me: PlayerId | null): boolean {
-  if (!me) return false;
+/**
+ * Online, a lapsed timer is claimed by whoever's watching. The player seated
+ * after the idle one goes first; everyone else backs them up a few seconds
+ * apart, so one dropped connection can't stall the game. (Duplicates are
+ * rejected by the server: the deadline has moved on by then.)
+ */
+function timeoutWatchDelay(game: PublicState, me: PlayerId | null): number | null {
   const active = game.turnOrder.filter((id) => game.players.find((p) => p.id === id)?.status === "active");
-  if (game.status === "setup") return active[0] === me;
-  const i = active.indexOf(game.currentPlayer ?? "");
-  return active[(i + 1) % active.length] === me;
+  const mine = me ? active.indexOf(me) : -1;
+  if (mine < 0) return null;
+  const everyoneAtOnce = game.status === "setup" && game.phase !== "claim";
+  const first = everyoneAtOnce ? 0 : (active.indexOf(game.currentPlayer ?? "") + 1) % active.length;
+  const rank = (mine - first + active.length) % active.length;
+  return 1500 + rank * 4000;
 }

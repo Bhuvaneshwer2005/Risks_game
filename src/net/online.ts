@@ -114,7 +114,7 @@ export class OnlineConnection extends ConnectionBase implements GameConnection {
       supabase.from("rooms").select("*").eq("id", this.roomId).maybeSingle(),
       supabase.from("room_players").select("user_id, seat, name, color").eq("room_id", this.roomId).order("seat"),
       supabase.from("player_hands").select("cards").eq("room_id", this.roomId).eq("user_id", this.userId).maybeSingle(),
-      supabase.from("game_events").select("seq, payload").eq("room_id", this.roomId).order("seq", { ascending: false }).limit(40),
+      supabase.from("game_events").select("seq, payload").eq("room_id", this.roomId).order("seq", { ascending: false }).limit(FEED_LIMIT),
     ]);
     if (this.disposed) return;
     if (room.error || seats.error) {
@@ -185,7 +185,14 @@ export class OnlineConnection extends ConnectionBase implements GameConnection {
   // ---------- commands ----------
 
   async act(action: GameAction): Promise<void> {
-    const res = await callGame<ActResponse>("act", { roomId: this.roomId, action });
+    this.applyResponse(await callGame<ActResponse>("act", { roomId: this.roomId, action }));
+  }
+
+  async kickPlayer(playerId: string): Promise<void> {
+    this.applyResponse(await callGame<ActResponse>("kick-player", { roomId: this.roomId, userId: playerId }));
+  }
+
+  private applyResponse(res: Awaited<ReturnType<typeof callGame<ActResponse>>>) {
     this.syncClock(res.serverTime, res.latency);
     if (res.version > this.version && this.room) {
       this.version = res.version;

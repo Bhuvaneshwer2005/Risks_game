@@ -48,10 +48,12 @@ export interface GameConnection {
   leave(): Promise<void>;
   /** Online host only: reset a finished room to its lobby with the same players. */
   rematch?(): Promise<void>;
+  /** Removes a player from the game in progress (online: host only). */
+  kickPlayer(playerId: PlayerId): Promise<void>;
   dispose(): void;
 }
 
-export const FEED_LIMIT = 80;
+export const FEED_LIMIT = 250;
 
 /** Small base class: listener bookkeeping and immutable snapshot updates. */
 export abstract class ConnectionBase {

@@ -156,26 +156,106 @@
   box-shadow: inset 0 0 0 1px rgba(242, 207, 120, 0.4);
 }
 
-/* ---------- range ---------- */
+/* ---------- army stepper ---------- */
 
-.range {
+.stepper {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
-.range input[type="range"] {
-  flex: 1;
-  accent-color: var(--gold);
-  height: 28px;
+.stepperMain {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 14px;
+  background: rgba(6, 11, 22, 0.7);
+  border: 1px solid var(--panel-border);
+  outline: none;
 }
 
-.rangeValue {
-  min-width: 34px;
+.stepperMain:focus-visible {
+  box-shadow: 0 0 0 2px var(--gold-glow);
+}
+
+.stepperButton {
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: 10px;
+  background: rgba(148, 170, 210, 0.08);
+  color: var(--text);
+  touch-action: manipulation;
+  user-select: none;
+  transition: background 0.15s ease, transform 0.1s ease;
+}
+
+.stepperButton:hover:not(:disabled) {
+  background: rgba(148, 170, 210, 0.16);
+}
+
+.stepperButton:active:not(:disabled) {
+  transform: scale(0.94);
+}
+
+.stepperButton:disabled {
+  opacity: 0.35;
+}
+
+.stepperValue {
+  min-width: 58px;
   text-align: center;
+  font-size: 26px;
   font-weight: 700;
-  font-size: 16px;
+  font-variant-numeric: tabular-nums;
   color: var(--gold-bright);
+  animation: stepperPop 0.18s var(--ease-out, ease-out);
+}
+
+@keyframes stepperPop {
+  from {
+    transform: scale(1.18);
+  }
+}
+
+.stepperPresets {
+  display: inline-flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.stepperPreset {
+  min-width: 44px;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--panel-border-strong);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 13px;
+  font-weight: 600;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.stepperPreset:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--gold);
+}
+
+.stepperPresetActive {
+  background: linear-gradient(180deg, rgba(242, 207, 120, 0.22), rgba(212, 168, 75, 0.14));
+  color: var(--gold-bright);
+  border-color: rgba(242, 207, 120, 0.5);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stepperValue {
+    animation: none;
+  }
 }
 
 /* ---------- modal ---------- */
@@ -472,6 +552,12 @@ button.card:hover:not(:disabled) {
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--text-dim);
+}
+
+.fieldHint {
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text-faint);
 }
 
 .input {

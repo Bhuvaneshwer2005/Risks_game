@@ -46,7 +46,7 @@ export function Home(props: HomeProps) {
               onChange={(e) => setPrefs({ name: e.target.value })}
             />
           </Field>
-          <Field label="Your color">
+          <Field label="Your color" group>
             <ColorSwatches colors={PLAYER_COLORS} value={prefs.color} onChange={(color) => setPrefs({ color })} />
           </Field>
         </div>

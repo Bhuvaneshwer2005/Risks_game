@@ -7,7 +7,7 @@ import { act } from "./testHelpers.ts";
 
 const seats = (n: number) => Array.from({ length: n }, (_, i) => ({ id: `p${i + 1}`, name: `P${i + 1}`, color: `#${i}${i}${i}` }));
 const newGame = (n: number, turnSeconds: number | null = null) =>
-  createGame({ players: seats(n), settings: { turnSeconds }, rng: mulberry32(42), now: 1_000 });
+  createGame({ players: seats(n), settings: { turnSeconds, setupMode: "deal" }, rng: mulberry32(42), now: 1_000 });
 
 const owned = (s: GameState, id: string) => ALL_TERRITORY_IDS.filter((t) => s.territories[t].owner === id);
 const armiesOf = (s: GameState, id: string) => owned(s, id).reduce((sum, t) => sum + s.territories[t].armies, 0);

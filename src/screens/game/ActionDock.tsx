@@ -2,12 +2,16 @@ import { useState, type ReactNode } from "react";
 import { CONTINENTS, TERRITORIES, type TerritoryId } from "../../game/mapData.ts";
 import { maxAttackerDice } from "../../game/combat.ts";
 import { reinforcementBreakdown } from "../../game/selectors.ts";
-import type { PendingCapture, PlayerId, PlayerState, PublicState } from "../../game/types.ts";
-import { Button, Dot, RangeField, Segmented } from "../../ui/index.tsx";
+import type { PendingCapture, PlayerId, PlayerState, PlayerStatus, PublicState } from "../../game/types.ts";
+import { ArmyStepper, Button, Dot, Segmented } from "../../ui/index.tsx";
 import styles from "./game.module.css";
 
 export type DockMode =
   | { kind: "over" }
+  | { kind: "claim"; left: number }
+  | { kind: "claim-wait"; player: PlayerState; left: number }
+  /** Online: this player is out but still watching. */
+  | { kind: "out"; status: PlayerStatus }
   | { kind: "setup-place"; pool: number }
   | { kind: "setup-wait"; ready: number; total: number }
   | { kind: "wait"; player: PlayerState }
@@ -29,6 +33,7 @@ export interface DockProps {
   from: TerritoryId | null;
   to: TerritoryId | null;
   captureDismissed: boolean;
+  onPickForMe: () => void;
   onConfirmPlacement: () => void;
   onAutoPlace: () => void;
   onClearDraft: () => void;
@@ -57,7 +62,8 @@ function Title({ children, hint }: { children: ReactNode; hint?: ReactNode }) {
 
 export function ActionDock(p: DockProps) {
   const body = <DockBody {...p} />;
-  if (!p.actor || p.mode.kind === "over" || p.mode.kind === "wait" || p.mode.kind === "setup-wait") return body;
+  const waiting = ["over", "wait", "setup-wait", "claim-wait", "out"].includes(p.mode.kind);
+  if (!p.actor || waiting) return body;
   return (
     <div className={styles.dockStack}>
       <div className={styles.actorChip} style={{ borderColor: p.actor.color }}>
@@ -74,6 +80,44 @@ function DockBody(p: DockProps) {
   switch (mode.kind) {
     case "over":
       return null;
+
+    case "claim":
+      return (
+        <div className={styles.dock}>
+          <Title
+            hint={
+              TOUCH
+                ? "Tap any empty territory to claim it with one army."
+                : "Click any empty territory to claim it with one army. Grouping up makes a continent easier to hold."
+            }
+          >
+            Claim a territory · <span className={styles.gold}>{mode.left} unclaimed</span>
+          </Title>
+          <div className={styles.dockRow}>
+            <Button variant="secondary" icon="dice" onClick={p.onPickForMe} disabled={p.busy}>
+              Pick for me
+            </Button>
+          </div>
+        </div>
+      );
+
+    case "claim-wait":
+      return (
+        <div className={styles.dock}>
+          <Title hint="Territories are claimed one at a time, in turn order.">
+            <Dot color={mode.player.color} /> {mode.player.name} is choosing · <span className={styles.muted}>{mode.left} unclaimed</span>
+          </Title>
+        </div>
+      );
+
+    case "out":
+      return (
+        <div className={styles.dock}>
+          <Title hint="You can keep watching the war, or leave with the flag button.">
+            {mode.status === "kicked" ? "The host removed you from the game" : mode.status === "eliminated" ? "You've been knocked out" : "You left the war"}
+          </Title>
+        </div>
+      );
 
     case "setup-wait":
       return (
@@ -186,7 +230,7 @@ function CaptureDock(p: DockProps & { pending: PendingCapture }) {
       <Title hint={`${name(p.pending.to)} is yours. Move more armies in from ${name(p.pending.from)}?`}>
         <span className={styles.gold}>Territory captured</span>
       </Title>
-      <RangeField label="Extra armies to move" min={0} max={max} value={extra} onChange={setExtra} />
+      <ArmyStepper label="Extra armies to move" min={0} max={max} value={extra} onChange={setExtra} />
       <div className={styles.dockRow}>
         <Button variant="ghost" onClick={p.onDismissCapture}>
           Keep as is
@@ -264,7 +308,7 @@ function FortifyDock(p: DockProps) {
           <Title hint="One fortify move per turn. It ends your turn.">
             Move from {name(from)} → {name(to)}
           </Title>
-          <RangeField label="Armies to move" min={1} max={Math.max(1, max)} value={count} onChange={setCount} />
+          <ArmyStepper label="Armies to move" min={1} max={Math.max(1, max)} value={count} onChange={setCount} />
         </>
       ) : (
         <Title hint={from ? "Pick where to move them." : `Move armies once, into ${rule}, or end your turn.`}>Fortify</Title>

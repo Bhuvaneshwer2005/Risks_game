@@ -9,7 +9,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { MAX_PLAYERS, MIN_PLAYERS, RuleError, applyAction, createGame } from "./_engine/engine.ts";
 import { toPublicState } from "./_engine/state.ts";
-import { DEFAULT_SETTINGS } from "./_engine/types.ts";
+import { DEFAULT_SETTINGS, type GameAction } from "./_engine/types.ts";
 import { commit, loadRoom, loadSeats, transact, type Db, type RoomRow } from "./db.ts";
 import { BadRequest, parseAction, parseCode, parseColor, parseName, parseSettings, parseUuid } from "./validate.ts";
 
@@ -187,6 +187,21 @@ async function act(db: Db, userId: string, body: Body) {
   const roomId = parseUuid(body.roomId, "roomId");
   const action = parseAction(body.action);
   await requireSeat(db, roomId, userId);
+  return runAction(db, roomId, userId, action);
+}
+
+// Only the host can remove a player from a game in progress; parseAction never
+// accepts "kick", so it can't arrive through `act`.
+async function kickPlayer(db: Db, userId: string, body: Body) {
+  const roomId = parseUuid(body.roomId, "roomId");
+  const target = parseUuid(body.userId, "userId");
+  const room = await loadRoom(db, roomId);
+  requireHost(room, userId);
+  if (room.status !== "in_progress") throw new BadRequest("There's no game in progress");
+  return runAction(db, roomId, userId, { type: "kick", player: target });
+}
+
+async function runAction(db: Db, roomId: string, userId: string, action: GameAction) {
   const { result, version, firstSeq } = await transact(db, roomId, (state) =>
     applyAction(state, action, { actor: userId, rng: secureRandom, now: Date.now() }),
   );
@@ -209,6 +224,7 @@ const HANDLERS: Record<string, (db: Db, userId: string, body: Body) => Promise<R
   "start-game": startGame,
   rematch,
   act,
+  "kick-player": kickPlayer,
 };
 
 Deno.serve(async (req: Request) => {

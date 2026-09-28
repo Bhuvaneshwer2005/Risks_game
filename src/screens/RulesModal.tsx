@@ -1,4 +1,5 @@
 import { CONTINENTS } from "../game/mapData.ts";
+import { TIME_BONUS_SECONDS } from "../game/types.ts";
 import { Modal } from "../ui/index.tsx";
 import styles from "./screens.module.css";
 
@@ -13,9 +14,18 @@ export function RulesModal({ onClose }: { onClose: () => void }) {
         <section>
           <h3>Setup</h3>
           <p>
-            Territories are dealt out at random with one army each. Everyone then places the rest of their starting armies (35 / 30 / 25 / 20 for 3–6
-            players, 40 in a 2-player game) at the same time.
+            Everyone gets starting armies: 35 / 30 / 25 / 20 for 3–6 players, 40 in a 2-player game. The lobby picks how the map fills up:
           </p>
+          <ul>
+            <li>
+              <b>Claim territories</b> (default). The map starts empty. Players take turns claiming one empty territory at a time, putting one army on
+              it, until all 42 are taken. In a 2-player game the neutral army claims one after each round.
+            </li>
+            <li>
+              <b>Deal at random.</b> Territories are dealt out at random with one army each.
+            </li>
+          </ul>
+          <p>Then everyone places the rest of their starting armies on their own territories at the same time.</p>
         </section>
         <section>
           <h3>Each turn</h3>
@@ -59,7 +69,12 @@ export function RulesModal({ onClose }: { onClose: () => void }) {
           <ul>
             <li>The defender always rolls the most dice allowed, so no one waits on anyone.</li>
             <li>Blitz keeps rolling until you capture the territory or can't attack any more.</li>
+            <li>
+              Every move (placing, trading, attacking, moving in) adds {TIME_BONUS_SECONDS} seconds to the turn timer, up to a full turn, so a last-second
+              decision still counts.
+            </li>
             <li>When the turn timer runs out, the turn is finished for you. Three timeouts in a row and you're out.</li>
+            <li>The host can remove a player who has gone quiet. Their armies stay on the board as neutral defenders.</li>
           </ul>
         </section>
       </div>

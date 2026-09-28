@@ -8,6 +8,7 @@ import {
   type ButtonHTMLAttributes,
   type HTMLAttributes,
   type InputHTMLAttributes,
+  type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react";
 import { TERRITORIES } from "../game/mapData.ts";
@@ -76,27 +77,118 @@ export function Segmented<T extends string | number>(props: {
 
 // ---------- Range ----------
 
-export function RangeField(props: { min: number; max: number; value: number; onChange: (v: number) => void; label: string }) {
-  const { min, max } = props;
+/**
+ * Army count picker: a big number with -/+ (hold to repeat) and one-tap
+ * presets. Arrow keys work while it has focus; PageUp/PageDown jump by 5.
+ */
+export function ArmyStepper(props: { min: number; max: number; value: number; onChange: (v: number) => void; label: string }) {
+  const { min, max, onChange } = props;
   const value = Math.min(max, Math.max(min, props.value));
+  const clamp = (v: number) => Math.min(max, Math.max(min, Math.round(v)));
+  // Latest value for the hold-to-repeat timer, which outlives renders.
+  const valueRef = useRef(value);
+  useEffect(() => {
+    valueRef.current = value;
+  });
+  const repeat = useRef<number | null>(null);
+
+  const stop = () => {
+    if (repeat.current !== null) window.clearTimeout(repeat.current);
+    repeat.current = null;
+  };
+  useEffect(() => stop, []);
+
+  // Press and hold: one step now, then faster and faster.
+  const hold = (dir: 1 | -1) => {
+    stop();
+    let delay = 380;
+    const step = () => {
+      const next = clamp(valueRef.current + dir);
+      if (next === valueRef.current) return stop();
+      valueRef.current = next;
+      onChange(next);
+      delay = Math.max(55, delay * 0.78);
+      repeat.current = window.setTimeout(step, delay);
+    };
+    step();
+  };
+
+  const presets = [
+    { label: "1", value: Math.max(min, 1) },
+    { label: "3", value: 3 },
+    { label: "Half", value: Math.ceil(max / 2) },
+    { label: "Max", value: max },
+  ].filter((p, i, all) => p.value >= min && p.value <= max && all.findIndex((q) => q.value === p.value) === i);
+
+  const onKey = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    const moves: Record<string, number> = { ArrowUp: 1, ArrowRight: 1, ArrowDown: -1, ArrowLeft: -1, PageUp: 5, PageDown: -5 };
+    if (e.key === "Home") onChange(min);
+    else if (e.key === "End") onChange(max);
+    else if (moves[e.key]) onChange(clamp(value + moves[e.key]));
+    else return;
+    e.preventDefault();
+  };
+
+  const disabled = min === max;
   return (
-    <div className={s.range}>
-      <Button size="sm" variant="ghost" onClick={() => props.onChange(min)} disabled={value === min} aria-label="Minimum">
-        Min
-      </Button>
-      <input
-        type="range"
-        min={min}
-        max={max}
-        value={value}
+    <div className={s.stepper}>
+      <div
+        className={s.stepperMain}
+        role="spinbutton"
+        tabIndex={0}
         aria-label={props.label}
-        onChange={(e) => props.onChange(Number(e.target.value))}
-        disabled={min === max}
-      />
-      <span className={s.rangeValue}>{value}</span>
-      <Button size="sm" variant="ghost" onClick={() => props.onChange(max)} disabled={value === max} aria-label="Maximum">
-        Max
-      </Button>
+        aria-valuemin={min}
+        aria-valuemax={max}
+        aria-valuenow={value}
+        onKeyDown={onKey}
+      >
+        <button
+          type="button"
+          className={s.stepperButton}
+          aria-label="One fewer"
+          disabled={disabled || value <= min}
+          onPointerDown={(e) => {
+            e.preventDefault();
+            hold(-1);
+          }}
+          onPointerUp={stop}
+          onPointerLeave={stop}
+          onPointerCancel={stop}
+        >
+          <Icon name="minus" />
+        </button>
+        <span className={s.stepperValue} key={value}>
+          {value}
+        </span>
+        <button
+          type="button"
+          className={s.stepperButton}
+          aria-label="One more"
+          disabled={disabled || value >= max}
+          onPointerDown={(e) => {
+            e.preventDefault();
+            hold(1);
+          }}
+          onPointerUp={stop}
+          onPointerLeave={stop}
+          onPointerCancel={stop}
+        >
+          <Icon name="plus" />
+        </button>
+      </div>
+      <div className={s.stepperPresets} role="group" aria-label="Quick picks">
+        {presets.map((p) => (
+          <button
+            key={p.label}
+            type="button"
+            className={cx(s.stepperPreset, value === p.value && s.stepperPresetActive)}
+            onClick={() => onChange(p.value)}
+            disabled={disabled}
+          >
+            {p.label}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
@@ -298,12 +390,25 @@ export function TimerRing({ deadline, total, size = 34 }: { deadline: number; to
   );
 }
 
-export function Field({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <label className={s.field}>
+/**
+ * A labelled form control. Use `group` for a set of buttons (a <label> would
+ * forward clicks on its text to the first button), and `hint` for a line of
+ * explanation underneath.
+ */
+export function Field({ label, hint, group, children }: { label: string; hint?: ReactNode; group?: boolean; children: ReactNode }) {
+  const body = (
+    <>
       <span className={s.label}>{label}</span>
       {children}
-    </label>
+      {hint && <span className={s.fieldHint}>{hint}</span>}
+    </>
+  );
+  return group ? (
+    <div className={s.field} role="group" aria-label={label}>
+      {body}
+    </div>
+  ) : (
+    <label className={s.field}>{body}</label>
   );
 }
 

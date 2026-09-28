@@ -109,7 +109,7 @@ export default function Board3D(props: BoardMapProps & { onUnsupported?: () => v
           {hovered && (
             <div className={styles.tooltipOwner}>
               <span className={styles.dot} style={{ background: hoverOwner?.color ?? "#6b7280" }} />
-              {hoverOwner?.name ?? "Unclaimed"} · {hovered.armies} {hovered.armies === 1 ? "army" : "armies"}
+              {hovered.owner ? `${hoverOwner?.name ?? "Someone"} · ${hovered.armies} ${hovered.armies === 1 ? "army" : "armies"}` : "Unclaimed"}
             </div>
           )}
         </div>

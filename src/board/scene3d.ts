@@ -380,8 +380,9 @@ export class BoardScene {
       v.outline.color.copy(isSelected ? GOLD : isTarget ? WHITE : OUTLINE);
       v.outline.opacity = isSelected || isTarget ? 1 : dimmed ? 0.5 : 0.8;
 
-      v.coin.visible = v.badge.visible = !!t;
-      if (t) {
+      // Unclaimed territories (claim setup) show no badge.
+      v.coin.visible = v.badge.visible = !!t?.owner;
+      if (t?.owner) {
         const color = owner?.color ?? "#6b7280";
         v.coin.material.color.set(color);
         const draft = state.draft?.[v.id] ?? 0;

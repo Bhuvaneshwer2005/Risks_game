@@ -38,6 +38,8 @@ function placements(value: unknown): Placements {
 export function parseAction(value: unknown): GameAction {
   const a = obj(value, "action");
   switch (a.type) {
+    case "claim":
+      return { type: "claim", territory: str(a.territory, "territory") as never };
     case "setupPlace":
     case "reinforce":
       return { type: a.type, placements: placements(a.placements) };
@@ -77,7 +79,10 @@ export function parseSettings(value: unknown): GameSettings {
   if (s.cardMode !== "progressive" && s.cardMode !== "fixed") fail("Unknown card mode");
   const turnSeconds = s.turnSeconds ?? null;
   if (!TURN_SECONDS.has(turnSeconds as number | null)) fail("Unsupported turn timer");
-  return { fortifyRule: s.fortifyRule, cardMode: s.cardMode, turnSeconds: turnSeconds as number | null };
+  // Rooms created before claiming existed have no setupMode.
+  const setupMode = s.setupMode ?? "claim";
+  if (setupMode !== "claim" && setupMode !== "deal") fail("Unknown setup mode");
+  return { setupMode, fortifyRule: s.fortifyRule, cardMode: s.cardMode, turnSeconds: turnSeconds as number | null };
 }
 
 export function parseName(value: unknown): string {

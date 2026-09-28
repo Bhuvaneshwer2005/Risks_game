@@ -19,9 +19,12 @@ import {
   type GameSettings,
   type GameState,
   type Phase,
+  CLAIM_SECONDS,
+  TIME_BONUS_SECONDS,
   type Placements,
   type PlayerId,
   type PlayerState,
+  type PlayerStats,
   type TerritoryState,
 } from "./types.ts";
 
@@ -42,7 +45,7 @@ export const MAX_PLAYERS = 6;
 export const MAX_TIMEOUT_STRIKES = 3;
 export const NEUTRAL_COLOR = "#8b93a1";
 /** Setup gets twice the normal turn time: everyone places their whole starting pool. */
-const SETUP_TIME_MULTIPLIER = 2;
+export const SETUP_TIME_MULTIPLIER = 2;
 
 // Classic starting-army table: 35/30/25/20 for 3-6 players, and 40 each in
 // the official 2-player game (which also gives the neutral army 40).
@@ -66,9 +69,12 @@ export interface CreateGameOptions {
   now: number;
 }
 
-// Official quick setup: deal the territories out at random with one army on
-// each, then every player places the rest of their starting armies (the
-// setup phase). In a 2-player game the neutral army's pool is placed at random.
+// Two official setups. "claim" (the rulebook's standard): the map starts
+// empty and players take turns claiming one territory with one army. "deal"
+// (the rulebook's quick start): territories are dealt out at random. Either
+// way, everyone then places the rest of their starting armies at once (the
+// setup phase). In a 2-player game the neutral army claims after each round
+// and its remaining armies are placed at random.
 export function createGame(options: CreateGameOptions): GameState {
   const { rng, now } = options;
   const seats = options.players;
@@ -97,27 +103,34 @@ export function createGame(options: CreateGameOptions): GameState {
   );
   const holders = withNeutral ? [...turnOrder, NEUTRAL_ID] : turnOrder;
 
+  const claim = settings.setupMode === "claim";
   const territories = {} as Record<TerritoryId, TerritoryState>;
-  shuffle(ALL_TERRITORY_IDS, rng).forEach((id, i) => {
-    territories[id] = { owner: holders[i % holders.length], armies: 1 };
-  });
-
   const setupPools: Record<PlayerId, number> = {};
-  for (const id of turnOrder) setupPools[id] = armiesEach - ownedBy(territories, id).length;
-  if (withNeutral) {
-    distributeArmies(territories, NEUTRAL_ID, armiesEach - ownedBy(territories, NEUTRAL_ID).length, rng, false);
+  if (claim) {
+    for (const id of ALL_TERRITORY_IDS) territories[id] = { owner: null, armies: 0 };
+    for (const id of holders) setupPools[id] = armiesEach;
+  } else {
+    shuffle(ALL_TERRITORY_IDS, rng).forEach((id, i) => {
+      territories[id] = { owner: holders[i % holders.length], armies: 1 };
+    });
+    for (const id of turnOrder) setupPools[id] = armiesEach - ownedBy(territories, id).length;
+    if (withNeutral) {
+      distributeArmies(territories, NEUTRAL_ID, armiesEach - ownedBy(territories, NEUTRAL_ID).length, rng, false);
+    }
   }
 
   const hands: Record<PlayerId, Card[]> = {};
   for (const p of players) hands[p.id] = [];
+  const stats: Record<PlayerId, PlayerStats> = {};
+  for (const p of players) stats[p.id] = emptyStats();
 
   return {
     settings,
     status: "setup",
     players,
     turnOrder,
-    currentPlayer: null,
-    phase: "setup",
+    currentPlayer: claim ? turnOrder[0] : null,
+    phase: claim ? "claim" : "setup",
     territories,
     setupPools,
     reinforcements: 0,
@@ -127,13 +140,45 @@ export function createGame(options: CreateGameOptions): GameState {
     territoryBonusUsed: false,
     setsTraded: 0,
     turnNumber: 0,
-    turnDeadline: settings.turnSeconds ? now + settings.turnSeconds * SETUP_TIME_MULTIPLIER * 1000 : null,
+    turnDeadline: settings.turnSeconds ? now + (claim ? CLAIM_SECONDS : settings.turnSeconds * SETUP_TIME_MULTIPLIER) * 1000 : null,
     winner: null,
+    stats,
+    history: [],
     deck: shuffle(buildDeck(), rng),
     discard: [],
     hands,
   };
 }
+
+export function emptyStats(): PlayerStats {
+  return {
+    turns: 0,
+    reinforcements: 0,
+    setsTraded: 0,
+    cardArmies: 0,
+    attacks: 0,
+    rolls: 0,
+    attackDice: 0,
+    attackPips: 0,
+    defendDice: 0,
+    defendPips: 0,
+    conquests: 0,
+    territoriesLost: 0,
+    armiesDestroyed: 0,
+    armiesLost: 0,
+    defensiveKills: 0,
+    eliminations: 0,
+    fortifies: 0,
+    peakTerritories: 0,
+    peakArmies: 0,
+    outOnTurn: null,
+    outBy: null,
+    place: null,
+  };
+}
+
+/** Actions that earn the player extra time on the turn clock. */
+const TIME_BONUS_ACTIONS = new Set<GameAction["type"]>(["reinforce", "trade", "attack", "blitz", "moveMore", "endAttack"]);
 
 export interface ActionContext {
   /** The player sending the action (from auth on the server). */
@@ -187,6 +232,7 @@ function territoryName(id: TerritoryId): string {
 }
 
 const PHASE_LABEL: Record<Phase, string> = {
+  claim: "claiming",
   setup: "setup",
   reinforce: "reinforce",
   attack: "attack",
@@ -205,7 +251,14 @@ class ActionRunner {
   }
 
   dispatch(action: GameAction): void {
+    this.run(action);
+    if (TIME_BONUS_ACTIONS.has(action.type)) this.addTimeBonus();
+  }
+
+  run(action: GameAction): void {
     switch (action.type) {
+      case "claim":
+        return this.claim(action.territory);
       case "setupPlace":
         return this.setupPlace(action.placements);
       case "autoSetup":
@@ -230,6 +283,8 @@ class ActionRunner {
         return this.resign();
       case "claimTimeout":
         return this.claimTimeout();
+      case "kick":
+        return this.kick(action.player);
       default:
         fail(`Unknown action "${String((action as { type?: unknown }).type)}"`);
     }
@@ -305,10 +360,101 @@ class ActionRunner {
     return seconds ? this.ctx.now + seconds * 1000 : null;
   }
 
+  // A move made in the last seconds shouldn't lose the turn: every move adds
+  // time, but the clock never goes above a full turn (so it can't be farmed).
+  addTimeBonus(): void {
+    const s = this.s;
+    const seconds = s.settings.turnSeconds;
+    if (s.status !== "playing" || s.currentPlayer !== this.actor || s.turnDeadline === null || !seconds) return;
+    const now = this.ctx.now;
+    s.turnDeadline = Math.min(Math.max(s.turnDeadline, now) + TIME_BONUS_SECONDS * 1000, now + seconds * 1000);
+  }
+
+  stat(id: PlayerId): PlayerStats {
+    const all = (this.s.stats ??= {});
+    return (all[id] ??= emptyStats());
+  }
+
+  /** Records board totals for the stats charts and updates each player's peaks. */
+  snapshot(): void {
+    const s = this.s;
+    const territories = s.players.map((p) => ownedBy(s.territories, p.id).length);
+    const armies = s.players.map((p) =>
+      ALL_TERRITORY_IDS.reduce((sum, t) => sum + (s.territories[t].owner === p.id ? s.territories[t].armies : 0), 0),
+    );
+    s.players.forEach((p, i) => {
+      const st = this.stat(p.id);
+      st.peakTerritories = Math.max(st.peakTerritories, territories[i]);
+      st.peakArmies = Math.max(st.peakArmies, armies[i]);
+    });
+    (s.history ??= []).push({ turn: s.turnNumber, territories, armies });
+  }
+
   // ---- setup ----
+
+  claim(id: unknown): void {
+    const s = this.s;
+    if (s.status !== "setup" || s.phase !== "claim") fail("There are no territories left to claim");
+    this.requireActiveHuman();
+    if (s.currentPlayer !== this.actor) fail("It's not your pick yet");
+    const t = this.territory(id);
+    if (s.territories[t].owner !== null) fail(`${territoryName(t)} is already taken`);
+    this.claimFor(this.actor, t);
+    this.nextPick(this.actor);
+  }
+
+  claimFor(playerId: PlayerId, t: TerritoryId): void {
+    this.s.territories[t] = { owner: playerId, armies: 1 };
+    this.s.setupPools[playerId] = (this.s.setupPools[playerId] ?? 0) - 1;
+    this.events.push({ type: "claimed", player: playerId, territory: t });
+  }
+
+  emptyTerritories(): TerritoryId[] {
+    return ALL_TERRITORY_IDS.filter((t) => this.s.territories[t].owner === null);
+  }
+
+  /** Passes the pick on; the neutral army (2-player games) claims after each full round. */
+  nextPick(from: PlayerId): void {
+    const s = this.s;
+    const order = s.turnOrder;
+    const start = order.indexOf(from);
+    const active = (id: PlayerId) => this.player(id)?.status === "active";
+    const lastOfRound = !order.slice(start + 1).some(active);
+    if (lastOfRound && this.player(NEUTRAL_ID)) {
+      const empty = this.emptyTerritories();
+      if (empty.length > 0) this.claimFor(NEUTRAL_ID, empty[randomInt(this.ctx.rng, empty.length)]);
+    }
+    if (this.emptyTerritories().length === 0) return this.finishClaims();
+    for (let step = 1; step <= order.length; step++) {
+      const next = order[(start + step) % order.length];
+      if (active(next)) {
+        s.currentPlayer = next;
+        s.turnDeadline = this.deadline(s.settings.turnSeconds ? CLAIM_SECONDS : null);
+        return;
+      }
+    }
+  }
+
+  finishClaims(): void {
+    const s = this.s;
+    s.phase = "setup";
+    s.currentPlayer = null;
+    if (this.player(NEUTRAL_ID)) {
+      distributeArmies(s.territories, NEUTRAL_ID, s.setupPools[NEUTRAL_ID] ?? 0, this.ctx.rng, false);
+      s.setupPools[NEUTRAL_ID] = 0;
+    }
+    s.turnDeadline = this.deadline(s.settings.turnSeconds ? s.settings.turnSeconds * SETUP_TIME_MULTIPLIER : null);
+    this.events.push({ type: "claimsComplete" });
+    this.maybeFinishSetup();
+  }
+
+  requirePlacingPhase(): void {
+    if (this.s.phase === "claim") fail("Claim territories first: every territory needs an owner");
+  }
 
   setupPlace(placements: unknown): void {
     if (this.s.status !== "setup") fail("Setup is already over");
+    this.requirePlacingPhase();
     this.requireActiveHuman();
     const pool = this.s.setupPools[this.actor] ?? 0;
     if (pool === 0) fail("You've already placed your starting armies");
@@ -323,6 +469,7 @@ class ActionRunner {
 
   autoSetup(): void {
     if (this.s.status !== "setup") fail("Setup is already over");
+    this.requirePlacingPhase();
     this.requireActiveHuman();
     if ((this.s.setupPools[this.actor] ?? 0) === 0) fail("You've already placed your starting armies");
     this.autoPlaceSetup(this.actor);
@@ -336,9 +483,16 @@ class ActionRunner {
   }
 
   maybeFinishSetup(): void {
+    if (this.s.phase === "claim") {
+      // A player left mid-claim: if it was their pick, pass it on.
+      const current = this.s.currentPlayer;
+      if (!current || this.player(current)?.status !== "active") this.nextPick(current ?? this.s.turnOrder[0]);
+      return;
+    }
     if (activePlayers(this.s).some((p) => (this.s.setupPools[p.id] ?? 0) > 0)) return;
     this.s.status = "playing";
     this.events.push({ type: "gameStarted" });
+    this.snapshot();
     if (this.checkWinner()) return;
     const first = this.s.turnOrder.find((id) => this.player(id)?.status === "active");
     if (first) this.startTurn(first);
@@ -357,6 +511,10 @@ class ActionRunner {
     s.territoryBonusUsed = false;
     s.turnNumber += 1;
     s.turnDeadline = this.deadline(s.settings.turnSeconds);
+    const st = this.stat(playerId);
+    st.turns += 1;
+    st.reinforcements += s.reinforcements;
+    this.snapshot();
     this.events.push({ type: "turnStarted", player: playerId, turn: s.turnNumber, reinforcements: s.reinforcements });
   }
 
@@ -405,11 +563,15 @@ class ActionRunner {
     s.status = "finished";
     s.phase = "over";
     s.winner = alive[0]?.id ?? null;
+    if (s.winner) this.stat(s.winner).place = 1;
+    // Won while territories were still being claimed: the winner takes the rest.
+    if (s.winner) for (const t of ALL_TERRITORY_IDS) if (s.territories[t].owner === null) s.territories[t] = { owner: s.winner, armies: 1 };
     s.currentPlayer = null;
     s.turnDeadline = null;
     s.pendingCapture = null;
     s.reinforcements = 0;
     s.eliminationTrade = false;
+    this.snapshot();
     this.events.push({ type: "gameOver", winner: s.winner });
     return true;
   }
@@ -464,6 +626,10 @@ class ActionRunner {
         bonusTerritory = match.territory;
       }
     }
+
+    const st = this.stat(playerId);
+    st.setsTraded += 1;
+    st.cardArmies += armies;
 
     s.hands[playerId] = hand.filter((c) => !cards.includes(c));
     s.discard.push(...cards);
@@ -524,6 +690,28 @@ class ActionRunner {
       s.pendingCapture = src.armies > 1 ? { from, to, maxExtra: src.armies - 1 } : null;
     }
 
+    const atk = this.stat(this.actor);
+    atk.attacks += 1;
+    atk.rolls += rolls.length;
+    atk.armiesLost += attackerLosses;
+    atk.armiesDestroyed += defenderLosses;
+    for (const r of rolls) {
+      atk.attackDice += r.attacker.length;
+      atk.attackPips += r.attacker.reduce((a, b) => a + b, 0);
+    }
+    if (defender) {
+      const def = this.stat(defender);
+      def.armiesLost += defenderLosses;
+      def.armiesDestroyed += attackerLosses;
+      def.defensiveKills += attackerLosses;
+      for (const r of rolls) {
+        def.defendDice += r.defender.length;
+        def.defendPips += r.defender.reduce((a, b) => a + b, 0);
+      }
+      if (captured) def.territoriesLost += 1;
+    }
+    if (captured) atk.conquests += 1;
+
     this.events.push({
       type: "battle",
       player: this.actor,
@@ -548,7 +736,11 @@ class ActionRunner {
 
     // Knocking a player out hands you their cards.
     const taken = this.hand(defenderId);
+    this.stat(defenderId).place = activePlayers(s).length;
     defender.status = "eliminated";
+    this.stat(defenderId).outOnTurn = s.turnNumber;
+    this.stat(defenderId).outBy = this.actor;
+    this.stat(this.actor).eliminations += 1;
     s.hands[defenderId] = [];
     s.hands[this.actor] = [...this.hand(this.actor), ...taken];
     this.events.push({ type: "eliminated", player: defenderId, by: this.actor, cardsTaken: taken.length });
@@ -599,6 +791,7 @@ class ActionRunner {
     const n = this.int(count, 1, s.territories[from].armies - 1, "Armies to move");
     s.territories[from].armies -= n;
     s.territories[to].armies += n;
+    this.stat(this.actor).fortifies += 1;
     this.events.push({ type: "fortified", player: this.actor, from, to, count: n });
     // One fortify per turn, and it ends the turn.
     this.finishTurn(true);
@@ -615,19 +808,32 @@ class ActionRunner {
   // ---- leaving and timeouts ----
 
   resign(): void {
-    const s = this.s;
-    const p = this.requireActiveHuman();
+    this.leaveGame(this.requireActiveHuman(), "resigned");
+  }
 
+  kick(target: unknown): void {
+    const by = this.player(this.actor);
+    if (!by || by.neutral) fail("You're not a player in this game");
+    const p = typeof target === "string" ? this.player(target) : undefined;
+    if (!p || p.neutral) fail("That player isn't in this game");
+    if (p.id === this.actor) fail("You can't remove yourself: resign instead");
+    if (p.status !== "active") fail(`${p.name} is already out of the game`);
+    this.leaveGame(p, "kicked");
+  }
+
+  /** Takes a player out by their own choice (resign) or someone else's (kick). */
+  leaveGame(p: PlayerState, how: "resigned" | "kicked"): void {
+    const s = this.s;
     if (s.status === "setup") {
       if ((s.setupPools[p.id] ?? 0) > 0) this.autoPlaceSetup(p.id);
-      this.markResigned(p);
+      this.markOut(p, how);
       if (this.checkWinner()) return;
       this.maybeFinishSetup();
       return;
     }
 
     this.requirePlaying();
-    this.markResigned(p);
+    this.markOut(p, how);
     if (s.currentPlayer === p.id) {
       s.conqueredThisTurn = false;
       this.finishTurn(false);
@@ -636,18 +842,30 @@ class ActionRunner {
     }
   }
 
-  // A resigned player's armies stay on the board and defend, but never act.
-  markResigned(p: PlayerState): void {
-    p.status = "resigned";
+  // A player who left keeps their armies on the board: they defend, but never act.
+  markOut(p: PlayerState, how: "resigned" | "kicked"): void {
+    this.stat(p.id).place = activePlayers(this.s).length;
+    p.status = how;
+    this.stat(p.id).outOnTurn = this.s.turnNumber;
+    this.stat(p.id).outBy = how === "kicked" ? this.actor : null;
     this.s.discard.push(...this.hand(p.id));
     this.s.hands[p.id] = [];
-    this.events.push({ type: "resigned", player: p.id });
+    this.events.push(how === "kicked" ? { type: "kicked", player: p.id, by: this.actor } : { type: "resigned", player: p.id });
   }
 
   claimTimeout(): void {
     const s = this.s;
     if (s.turnDeadline === null) fail("This game has no turn timer");
     if (this.ctx.now < s.turnDeadline) fail("The turn timer hasn't run out yet");
+
+    if (s.status === "setup" && s.phase === "claim") {
+      const picker = s.currentPlayer;
+      if (!picker) fail("Nobody is picking");
+      const empty = this.emptyTerritories();
+      this.claimFor(picker, empty[randomInt(this.ctx.rng, empty.length)]);
+      this.nextPick(picker);
+      return;
+    }
 
     if (s.status === "setup") {
       for (const p of activePlayers(s)) {
@@ -666,7 +884,7 @@ class ActionRunner {
     p.timeoutStrikes += 1;
     this.events.push({ type: "timedOut", player: playerId, strikes: p.timeoutStrikes });
     if (p.timeoutStrikes >= MAX_TIMEOUT_STRIKES) {
-      this.markResigned(p);
+      this.markOut(p, "resigned");
       s.conqueredThisTurn = false;
     }
     this.finishTurn(false);
