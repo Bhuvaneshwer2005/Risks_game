@@ -20,6 +20,8 @@ import {
   type GameState,
   type Phase,
   CLAIM_SECONDS,
+  NEUTRAL_WORLD_MAX_ARMIES,
+  NEUTRAL_WORLD_START,
   TIME_BONUS_SECONDS,
   type Placements,
   type PlayerId,
@@ -75,6 +77,9 @@ export interface CreateGameOptions {
 // way, everyone then places the rest of their starting armies at once (the
 // setup phase). In a 2-player game the neutral army claims after each round
 // and its remaining armies are placed at random.
+//
+// A third, "neutral": neutral armies hold every territory except a small
+// connected foothold for each player, who fight their way out from there.
 export function createGame(options: CreateGameOptions): GameState {
   const { rng, now } = options;
   const seats = options.players;
@@ -83,7 +88,8 @@ export function createGame(options: CreateGameOptions): GameState {
   if (seats.some((p) => p.id === NEUTRAL_ID)) throw new RuleError(`"${NEUTRAL_ID}" is reserved`);
 
   const settings: GameSettings = { ...DEFAULT_SETTINGS, ...options.settings };
-  const withNeutral = seats.length === 2;
+  const neutralWorld = settings.setupMode === "neutral";
+  const withNeutral = seats.length === 2 || neutralWorld;
 
   const players: PlayerState[] = seats.map((p) => ({
     id: p.id,
@@ -109,6 +115,10 @@ export function createGame(options: CreateGameOptions): GameState {
   if (claim) {
     for (const id of ALL_TERRITORY_IDS) territories[id] = { owner: null, armies: 0 };
     for (const id of holders) setupPools[id] = armiesEach;
+  } else if (neutralWorld) {
+    for (const id of ALL_TERRITORY_IDS) territories[id] = { owner: NEUTRAL_ID, armies: 1 + randomInt(rng, NEUTRAL_WORLD_MAX_ARMIES) };
+    for (const [id, owner] of footholds(turnOrder, rng)) territories[id] = { owner, armies: 1 };
+    for (const id of turnOrder) setupPools[id] = armiesEach - ownedBy(territories, id).length;
   } else {
     shuffle(ALL_TERRITORY_IDS, rng).forEach((id, i) => {
       territories[id] = { owner: holders[i % holders.length], armies: 1 };
@@ -202,6 +212,41 @@ export function applyAction(state: GameState, action: GameAction, ctx: ActionCon
 
 function ownedBy(territories: Record<TerritoryId, TerritoryState>, playerId: PlayerId): TerritoryId[] {
   return ALL_TERRITORY_IDS.filter((t) => territories[t].owner === playerId);
+}
+
+// Neutral world starting positions: a random connected group of
+// NEUTRAL_WORLD_START territories per player, not touching anyone else's.
+// Random growth can box a player in, so it retries and keeps the best layout.
+function footholds(playerIds: PlayerId[], rng: Rng): Map<TerritoryId, PlayerId> {
+  let best = new Map<TerritoryId, PlayerId>();
+  let bestTouching = Infinity;
+  for (let attempt = 0; attempt < 100 && bestTouching > 0; attempt++) {
+    const owner = growFootholds(playerIds, rng);
+    let touching = 0;
+    for (const [t, p] of owner) if (ADJACENCY[t].some((n) => owner.has(n) && owner.get(n) !== p)) touching++;
+    if (touching < bestTouching) [best, bestTouching] = [owner, touching];
+  }
+  return best;
+}
+
+function growFootholds(playerIds: PlayerId[], rng: Rng): Map<TerritoryId, PlayerId> {
+  const owner = new Map<TerritoryId, PlayerId>();
+  const nearRival = (t: TerritoryId, p: PlayerId) => ADJACENCY[t].some((n) => owner.has(n) && owner.get(n) !== p);
+  for (const p of playerIds) {
+    const free = shuffle(ALL_TERRITORY_IDS, rng).filter((t) => !owner.has(t));
+    const seed = free.find((t) => !nearRival(t, p)) ?? free[0];
+    if (!seed) break;
+    const group = [seed];
+    owner.set(seed, p);
+    while (group.length < NEUTRAL_WORLD_START) {
+      const frontier = shuffle([...new Set(group.flatMap((t) => ADJACENCY[t]))], rng).filter((t) => !owner.has(t));
+      const next = frontier.find((t) => !nearRival(t, p)) ?? frontier[0];
+      if (!next) break;
+      group.push(next);
+      owner.set(next, p);
+    }
+  }
+  return owner;
 }
 
 // Drops `count` armies one at a time onto the player's territories. With

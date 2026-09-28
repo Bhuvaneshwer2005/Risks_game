@@ -81,7 +81,7 @@ export function parseSettings(value: unknown): GameSettings {
   if (!TURN_SECONDS.has(turnSeconds as number | null)) fail("Unsupported turn timer");
   // Rooms created before claiming existed have no setupMode.
   const setupMode = s.setupMode ?? "claim";
-  if (setupMode !== "claim" && setupMode !== "deal") fail("Unknown setup mode");
+  if (setupMode !== "claim" && setupMode !== "deal" && setupMode !== "neutral") fail("Unknown setup mode");
   return { setupMode, fortifyRule: s.fortifyRule, cardMode: s.cardMode, turnSeconds: turnSeconds as number | null };
 }
 

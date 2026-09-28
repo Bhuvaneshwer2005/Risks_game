@@ -29,8 +29,12 @@ export interface Card {
 }
 
 export type FortifyRule = "adjacent" | "connected";
-/** "claim": the map starts empty and players take turns claiming territories. "deal": territories are dealt out at random. */
-export type SetupMode = "claim" | "deal";
+/**
+ * "claim": the map starts empty and players take turns claiming territories.
+ * "deal": territories are dealt out at random.
+ * "neutral": neutral armies hold the world; each player starts with a small foothold.
+ */
+export type SetupMode = "claim" | "deal" | "neutral";
 export type CardMode = "progressive" | "fixed";
 
 export interface GameSettings {
@@ -57,6 +61,11 @@ export const TIME_BONUS_SECONDS = 15;
 
 /** Time for each pick while claiming territories. */
 export const CLAIM_SECONDS = 20;
+
+/** Neutral world: connected territories each player starts with. */
+export const NEUTRAL_WORLD_START = 3;
+/** Neutral world: each neutral territory starts with 1 to this many armies. */
+export const NEUTRAL_WORLD_MAX_ARMIES = 3;
 
 export type GameStatus = "setup" | "playing" | "finished";
 /** Setup runs "claim" (claim-mode games only), then "setup" (everyone places their remaining starting armies). */

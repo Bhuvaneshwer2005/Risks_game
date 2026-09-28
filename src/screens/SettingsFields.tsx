@@ -1,10 +1,11 @@
-import { TIME_BONUS_SECONDS, TURN_SECONDS_OPTIONS, type GameSettings } from "../game/types.ts";
+import { NEUTRAL_WORLD_MAX_ARMIES, NEUTRAL_WORLD_START, TIME_BONUS_SECONDS, TURN_SECONDS_OPTIONS, type GameSettings } from "../game/types.ts";
 import { Field, Segmented } from "../ui/index.tsx";
 import styles from "./screens.module.css";
 
 const SETUP_HINTS: Record<GameSettings["setupMode"], string> = {
   claim: "The map starts empty. Players take turns claiming one territory at a time, then everyone places the rest of their armies.",
   deal: "Territories are dealt out at random with one army each, then everyone places the rest of their armies.",
+  neutral: `Neutral armies (1 to ${NEUTRAL_WORLD_MAX_ARMIES} each) hold the whole world. Everyone starts with ${NEUTRAL_WORLD_START} connected territories, places their armies there, and fights outwards. Knock out the other players to win.`,
 };
 
 const FORTIFY_HINTS: Record<GameSettings["fortifyRule"], string> = {
@@ -31,6 +32,7 @@ export function SettingsFields({ value, onChange, disabled }: { value: GameSetti
           options={[
             { value: "claim", label: "Claim territories", disabled },
             { value: "deal", label: "Deal at random", disabled },
+            { value: "neutral", label: "Neutral world", disabled },
           ]}
         />
       </Field>

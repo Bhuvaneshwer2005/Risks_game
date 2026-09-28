@@ -173,7 +173,7 @@ describe("fuzz: random full games", () => {
       const rng = mulberry32(1000 + game);
       const playerCount = 2 + (game % 5);
       const settings = {
-        setupMode: game % 2 === 0 ? ("claim" as const) : ("deal" as const),
+        setupMode: (["claim", "deal", "neutral"] as const)[game % 3],
         fortifyRule: game % 2 === 0 ? ("adjacent" as const) : ("connected" as const),
         cardMode: game % 3 === 0 ? ("fixed" as const) : ("progressive" as const),
         turnSeconds: game % 4 === 0 ? 60 : null,

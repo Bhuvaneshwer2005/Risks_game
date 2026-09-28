@@ -1,5 +1,5 @@
 import { CONTINENTS } from "../game/mapData.ts";
-import { TIME_BONUS_SECONDS } from "../game/types.ts";
+import { NEUTRAL_WORLD_MAX_ARMIES, NEUTRAL_WORLD_START, TIME_BONUS_SECONDS } from "../game/types.ts";
 import { Modal } from "../ui/index.tsx";
 import styles from "./screens.module.css";
 
@@ -23,6 +23,10 @@ export function RulesModal({ onClose }: { onClose: () => void }) {
             </li>
             <li>
               <b>Deal at random.</b> Territories are dealt out at random with one army each.
+            </li>
+            <li>
+              <b>Neutral world.</b> Neutral armies (1 to {NEUTRAL_WORLD_MAX_ARMIES} each) hold every territory except {NEUTRAL_WORLD_START} connected ones
+              per player. Fight outwards through the neutrals; you win by knocking out the other players, not by clearing every neutral.
             </li>
           </ul>
           <p>Then everyone places the rest of their starting armies on their own territories at the same time.</p>

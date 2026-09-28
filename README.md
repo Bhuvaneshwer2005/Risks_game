@@ -4,7 +4,7 @@ The classic board game, rebuilt for the browser: play online with friends in rea
 
 - **All the standard rules:** 42 territories, continent bonuses, 3-vs-2 dice where ties go to the defender, escalating card sets with the +2 territory bonus, forced trades, taking an eliminated player's cards, and the official 2-player neutral army.
 - **Online adaptations:** the defender auto-rolls the maximum dice, Blitz attacks, a turn timer (every move adds 15 seconds, up to a full turn) with auto-resign after three timeouts, resigning, and the host can remove a player who has gone quiet.
-- **House rules in the lobby:** claim territories one at a time from an empty map or deal them at random, classic or connected-chain fortify, escalating or fixed card values, and the turn timer length.
+- **House rules in the lobby:** claim territories one at a time from an empty map, deal them at random, or start from a small foothold in a world held by neutral armies, classic or connected-chain fortify, escalating or fixed card values, and the turn timer length.
 - **After the game:** final standings, awards, and a war report with territory and army charts and per-player numbers. A detailed game log (dice, captures, placements) runs throughout.
 
 ## Playing

@@ -1,7 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { createGame } from "../engine.ts";
+import { createGame, startingArmies } from "../engine.ts";
+import { ADJACENCY, ALL_TERRITORY_IDS, type TerritoryId } from "../mapData.ts";
 import { mulberry32 } from "../rng.ts";
-import { CLAIM_SECONDS, DEFAULT_SETTINGS, NEUTRAL_ID, TIME_BONUS_SECONDS, type GameState } from "../types.ts";
+import {
+  CLAIM_SECONDS,
+  DEFAULT_SETTINGS,
+  NEUTRAL_ID,
+  NEUTRAL_WORLD_MAX_ARMIES,
+  NEUTRAL_WORLD_START,
+  TIME_BONUS_SECONDS,
+  type GameState,
+} from "../types.ts";
 import { act, fillRest, fixedDice, makeState, player, withOwner } from "./testHelpers.ts";
 
 const SECOND = 1000;
@@ -223,5 +232,54 @@ describe("claiming territories (the default setup)", () => {
     g = act(g, a, { type: "resign" }).state;
     expect(g.currentPlayer).toBe(b);
     expect(g.phase).toBe("claim");
+  });
+});
+
+describe("neutral world", () => {
+  const seats = (n: number) => Array.from({ length: n }, (_, i) => ({ id: `p${i}`, name: `P${i}`, color: "#fff" }));
+  const connected = (ids: TerritoryId[]) => {
+    const seen = new Set([ids[0]]);
+    const queue = [ids[0]];
+    while (queue.length) {
+      for (const n of ADJACENCY[queue.shift()!]) {
+        if (!ids.includes(n) || seen.has(n)) continue;
+        seen.add(n);
+        queue.push(n);
+      }
+    }
+    return seen.size === ids.length;
+  };
+
+  it("fills the world with neutral armies around a small connected foothold per player", () => {
+    for (let n = 2; n <= 6; n++) {
+      for (let seed = 1; seed <= 40; seed++) {
+        const g = createGame({ players: seats(n), settings: { setupMode: "neutral" }, rng: mulberry32(seed), now: 0 });
+        expect(g.phase).toBe("setup");
+        expect(g.players.filter((p) => p.neutral)).toHaveLength(1);
+        for (const t of ALL_TERRITORY_IDS) {
+          const { owner, armies } = g.territories[t];
+          const [min, max] = owner === NEUTRAL_ID ? [1, NEUTRAL_WORLD_MAX_ARMIES] : [1, 1];
+          expect(armies).toBeGreaterThanOrEqual(min);
+          expect(armies).toBeLessThanOrEqual(max);
+        }
+        for (const id of g.turnOrder) {
+          const mine = ALL_TERRITORY_IDS.filter((t) => g.territories[t].owner === id);
+          expect(mine).toHaveLength(NEUTRAL_WORLD_START);
+          expect(connected(mine)).toBe(true);
+          // Nobody starts next to a rival.
+          expect(mine.every((t) => ADJACENCY[t].every((nb) => [id, NEUTRAL_ID].includes(g.territories[nb].owner!)))).toBe(true);
+          expect(g.setupPools[id]).toBe(startingArmies(n) - NEUTRAL_WORLD_START);
+        }
+      }
+    }
+  });
+
+  it("then plays as usual: the neutral army never takes a turn", () => {
+    let g = createGame({ players: seats(3), settings: { setupMode: "neutral" }, rng: mulberry32(5), now: 0 });
+    for (const id of g.turnOrder) g = act(g, id, { type: "autoSetup" }).state;
+    expect(g.status).toBe("playing");
+    expect(g.currentPlayer).toBe(g.turnOrder[0]);
+    expect(g.reinforcements).toBe(3);
+    expect(g.turnOrder).not.toContain(NEUTRAL_ID);
   });
 });

@@ -540,7 +540,8 @@ function GameView({ connection, game, onExit }: { connection: GameConnection; ga
                   <span title="Armies">{s.armies} armies</span>
                   {!p.neutral && <span title="Cards">{game.cardCounts[p.id] ?? 0} cards</span>}
                 </div>
-                {s.continents.length > 0 && (
+                {/* The neutral army never collects continent bonuses. */}
+                {s.continents.length > 0 && !p.neutral && (
                   <div className={styles.continentChips}>
                     {s.continents.map((c) => (
                       <span key={c} style={{ borderColor: p.color }}>
